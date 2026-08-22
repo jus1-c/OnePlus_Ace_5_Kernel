@@ -850,11 +850,11 @@ runs:
         cd "$KERNEL_PLATFORM_FOLDER"
         git clone --no-checkout https://github.com/ReSukiSU/ReSukiSU.git KernelSU
         cd KernelSU
-        git fetch --depth=1 origin "${{ inputs.ksu_branch_or_hash }}"
+        git fetch origin "${{ inputs.ksu_branch_or_hash }}"
         git checkout --detach "${{ inputs.ksu_branch_or_hash }}"
         test "$(git rev-parse HEAD)" = "${{ inputs.ksu_branch_or_hash }}"
         git submodule update --init --recursive
-        KSU_VERSION=$(git rev-list --count HEAD)
+        KSU_VERSION=$((30700 + $(git rev-list --count HEAD)))
         cd kernel
         if [ -f ksu.c ]; then
           sed -i 's/#if defined(CONFIG_STACKPROTECTOR) && (defined(CONFIG_ARM64) && !defined(CONFIG_STACKPROTECTOR_PER_TASK))/#if 0/' ksu.c
@@ -863,8 +863,26 @@ runs:
         KSU_COMMIT_SHA=$(git rev-parse HEAD)
         echo "KSU_COMMIT_SHA=$KSU_COMMIT_SHA" >> $GITHUB_ENV
         echo "NEED_HOOKS=false" >> $GITHUB_ENV
+        insert_before_last_endmenu() {
+          local file="$1" line="$2"
+          grep -Fqx "$line" "$file" && return 0
+          awk -v line="$line" '
+            { lines[NR] = $0 }
+            END {
+              last = 0
+              for (i = 1; i <= NR; i++)
+                if (lines[i] ~ /^endmenu[[:space:]]*$/) last = i
+              if (!last) print line
+              for (i = 1; i <= NR; i++) {
+                if (i == last) print line
+                print lines[i]
+              }
+            }
+          ' "$file" > "$file.tmp"
+          mv "$file.tmp" "$file"
+        }
         ln -sfn "$(realpath --relative-to="$COMMON_KERNEL_FOLDER/drivers" "$KERNEL_PLATFORM_FOLDER/KernelSU/kernel")" "$COMMON_KERNEL_FOLDER/drivers/kernelsu"
-        grep -q 'source "drivers/kernelsu/Kconfig"' "$COMMON_KERNEL_FOLDER/drivers/Kconfig" || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' "$COMMON_KERNEL_FOLDER/drivers/Kconfig"
+        insert_before_last_endmenu "$COMMON_KERNEL_FOLDER/drivers/Kconfig" 'source "drivers/kernelsu/Kconfig"'
         grep -q 'obj-$(CONFIG_KSU) += kernelsu/' "$COMMON_KERNEL_FOLDER/drivers/Makefile" || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> "$COMMON_KERNEL_FOLDER/drivers/Makefile"
         cat >> "$COMMON_KERNEL_FOLDER/arch/arm64/configs/gki_defconfig" <<EOF
         CONFIG_KSU=y
@@ -1063,7 +1081,25 @@ runs:
         test "$(git -C NoMount rev-parse HEAD)" = "${{ inputs.nomount_commit }}"
         mkdir -p common/fs/nomount
         cp NoMount/kernel/src/Kconfig NoMount/kernel/src/Makefile NoMount/kernel/src/nomount.c NoMount/kernel/src/nomount.h common/fs/nomount/
-        grep -q 'source "fs/nomount/Kconfig"' common/fs/Kconfig || sed -i '/^endmenu/i\source "fs/nomount/Kconfig"' common/fs/Kconfig
+        insert_before_last_endmenu() {
+          local file="$1" line="$2"
+          grep -Fqx "$line" "$file" && return 0
+          awk -v line="$line" '
+            { lines[NR] = $0 }
+            END {
+              last = 0
+              for (i = 1; i <= NR; i++)
+                if (lines[i] ~ /^endmenu[[:space:]]*$/) last = i
+              if (!last) print line
+              for (i = 1; i <= NR; i++) {
+                if (i == last) print line
+                print lines[i]
+              }
+            }
+          ' "$file" > "$file.tmp"
+          mv "$file.tmp" "$file"
+        }
+        insert_before_last_endmenu common/fs/Kconfig 'source "fs/nomount/Kconfig"'
         grep -q 'obj-$(CONFIG_NOMOUNT) += nomount/' common/fs/Makefile || printf '\nobj-$(CONFIG_NOMOUNT) += nomount/\n' >> common/fs/Makefile
         echo 'CONFIG_NOMOUNT=y' >> common/arch/arm64/configs/gki_defconfig
         echo "NOMOUNT_COMMIT_SHA=${{ inputs.nomount_commit }}" >> "$GITHUB_ENV"
@@ -1084,7 +1120,25 @@ runs:
         test "$(git -C Baseband-guard rev-parse HEAD)" = "${{ inputs.bbg_commit }}"
         ln -sfn "$(realpath --relative-to=common/security Baseband-guard)" common/security/baseband-guard
         grep -q 'baseband-guard/baseband_guard.o' common/security/Makefile || printf '\nobj-$(CONFIG_BBG) += baseband-guard/\n' >> common/security/Makefile
-        grep -q 'security/baseband-guard/Kconfig' common/security/Kconfig || sed -i '/^endmenu/i\source "security/baseband-guard/Kconfig"' common/security/Kconfig
+        insert_before_last_endmenu() {
+          local file="$1" line="$2"
+          grep -Fqx "$line" "$file" && return 0
+          awk -v line="$line" '
+            { lines[NR] = $0 }
+            END {
+              last = 0
+              for (i = 1; i <= NR; i++)
+                if (lines[i] ~ /^endmenu[[:space:]]*$/) last = i
+              if (!last) print line
+              for (i = 1; i <= NR; i++) {
+                if (i == last) print line
+                print lines[i]
+              }
+            }
+          ' "$file" > "$file.tmp"
+          mv "$file.tmp" "$file"
+        }
+        insert_before_last_endmenu common/security/Kconfig 'source "security/baseband-guard/Kconfig"'
         echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
         sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
         
@@ -1148,8 +1202,6 @@ runs:
         patch -p1 < "$KERNEL_PATCHES_FOLDER/oneplus/module_overlay/0001-module-Add-module-intercept-and-overlay-mechanism-$ANDROID_VER-$KERNEL_VER.patch"
         if [ -d "$COMMON_KERNEL_FOLDER/kernel/module/module_overlay/" ]; then
           chmod +x ./kernel/module/module_overlay/convert_overlay.sh
-        elif [ -d "$COMMON_KERNEL_FOLDER/kernel/module_overlay/" ]; then
-          chmod +x ./kernel/module_overlay/convert_overlay.sh
         fi
 
         copied_modules=""
@@ -1224,9 +1276,7 @@ runs:
             dest_path="$COMMON_KERNEL_FOLDER/kernel/module_overlay/modules/${module_name}.ko"
           fi
           
-          if [ -z "$dest_path" ]; then
-            cp -v -- "$file" "$dest_path"
-          fi
+          [[ -z "$dest_path" ]] || cp -v -- "$file" "$dest_path"
           
           if [ -z "$copied_modules" ]; then
             copied_modules="$dest_path"
