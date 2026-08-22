@@ -348,8 +348,8 @@ jobs:
             echo
             echo "## This release contains two downloads"
             echo
-            echo "1. **Kernel** — flash the matching \\`AK3_...zip\\` with Kernel Flasher or KernelSU Manager."
-            echo "2. **NoMount module** — install \\`${nomount_asset}\\` from KernelSU Manager Modules after rebooting into the kernel."
+            echo '1. **Kernel** — flash the matching `AK3_...zip` with Kernel Flasher or KernelSU Manager.'
+            printf '2. **NoMount module** — install `%s` from KernelSU Manager Modules after rebooting into the kernel.\n' "$nomount_asset"
             echo
             echo "> NoMount is compiled into kernel but remains dormant until module activates it. Install both."
             echo
@@ -360,22 +360,22 @@ jobs:
             for file in release-assets/AK3_*.zip; do
               name=$(basename "$file")
               sha=$(sha256sum "$file" | awk '{print $1}')
-              echo "| \\`${name}\\` | \\`${sha}\\` |"
+              printf '| `%s` | `%s` |\n' "$name" "$sha"
             done
             sha=$(sha256sum "release-assets/${nomount_asset}" | awk '{print $1}')
-            echo "| \\`${nomount_asset}\\` | \\`${sha}\\` |"
+            printf '| `%s` | `%s` |\n' "$nomount_asset" "$sha"
             echo
             echo "## Build configuration"
             echo
             echo "| Component | Value |"
             echo "|---|---|"
-            echo "| WildKernel release | \\`${wild_release}\\` |"
-            echo "| WildKernel commit | \\`${wild_sha}\\` |"
-            echo "| NoMount branch | \\`${nomount_branch}\\` |"
-            echo "| NoMount commit | \\`${nomount_sha}\\` |"
+            printf '| WildKernel release | `%s` |\n' "$wild_release"
+            printf '| WildKernel commit | `%s` |\n' "$wild_sha"
+            printf '| NoMount branch | `%s` |\n' "$nomount_branch"
+            printf '| NoMount commit | `%s` |\n' "$nomount_sha"
             echo "| Root | ReSukiSU |"
-            echo "| Optimization | \\`${{ inputs.optimize_level }}\\` |"
-            echo "| Clean build | \\`${{ inputs.clean_build }}\\` |"
+            printf '| Optimization | `%s` |\n' '${{ inputs.optimize_level }}'
+            printf '| Clean build | `%s` |\n' '${{ inputs.clean_build }}'
             echo
             echo "## Installation"
             echo
@@ -391,7 +391,7 @@ jobs:
             echo
             echo "## Sources"
             echo
-            echo "See \\`resolved-sources.json\\` and \\`00_CHECKSUMS.txt\\` attached to this release."
+            echo 'See `resolved-sources.json` and `00_CHECKSUMS.txt` attached to this release.'
             echo
             echo "Build run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } > release-assets/00_DOWNLOADS.md
