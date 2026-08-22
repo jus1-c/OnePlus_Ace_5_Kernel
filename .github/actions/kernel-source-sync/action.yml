@@ -140,9 +140,7 @@ runs:
                                 found_in_cache = True
                             
                         if not found_in_cache:
-                            print(f"::error::[FATAL ERROR] Toolchain {base_filename} NOT FOUND in GitHub Release cache!")
-                            print(f"::error::[FATAL ERROR] Please Run Mirror Toolchain Workflow or select sync toolchain during build!!!")
-                            return False
+                            print(f"[CACHE] {base_filename} not found; downloading from manifest source.")
                     
                     if found_in_cache:
                         parts = sorted(glob.glob(os.path.join(shm_workspace, f"*.part*")))
