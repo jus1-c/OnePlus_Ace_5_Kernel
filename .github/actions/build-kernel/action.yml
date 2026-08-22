@@ -2249,7 +2249,6 @@ runs:
       with:
         name: ${{ env.ZIP_NAME }}
         path: ${{ env.ARTIFACTS_FOLDER }}
-        archive: false
         compression-level: 0
         retention-days: 90
 
