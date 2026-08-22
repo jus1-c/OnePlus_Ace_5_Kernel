@@ -24,6 +24,30 @@ Use **Actions > Build OnePlus Ace 5 A16 > Run workflow**.
 Each run writes `resolved-sources.json` containing every full source commit,
 the selected WildKernel release, the NoMount green CI run, and target matrix.
 
+## WildKernel Updates
+
+The fork only compiles a new stable WildKernel release when it matches the
+reviewed contract in `config/wild-reviewed.json`. Before matrix builds begin,
+the resolver audits the selected tag and uploads `wild-audit.json` and
+`wild-audit.md` in the `resolved-sources` artifact.
+
+The audit fails closed before compilation if WildKernel changes its build
+action, source-sync action, release workflow, SUSFS release commit,
+`kernel_patches` commit, Ace 5 config schema, feature contract, or target
+paths. It also verifies that the audited commits match the earlier immutable
+source snapshot.
+
+To adopt a new stable release:
+
+1. Start a branch and run the manual workflow once to get the audit report.
+2. Review the upstream compare URL and port only Ace 5-relevant build changes
+   into this fork's local actions. Do not execute the upstream action directly.
+3. Extend `scripts/verify_kernel_config.sh` for any approved feature contract.
+4. Update `config/wild-reviewed.json` with reviewed full SHAs and schema.
+5. Run `GH_TOKEN="$(gh auth token)" bash tests/test_audit_wild_release.sh`.
+6. Run both Ace 5 targets with `publish_release=false`; merge only when both
+   kernels and the NoMount package pass.
+
 ## Artifacts
 
 Each target has a flashable AnyKernel3 ZIP, raw `Image`, final `.config`,

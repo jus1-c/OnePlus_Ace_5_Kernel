@@ -36,7 +36,7 @@ env:
 
 jobs:
   resolve:
-    name: Resolve immutable sources
+    name: Resolve and audit immutable sources
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.sources.outputs.matrix }}
@@ -44,12 +44,13 @@ jobs:
       wild_release: ${{ steps.sources.outputs.wild_release }}
     steps:
       - name: Checkout fork scripts
+        id: checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 1
 
       - name: Install resolver dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends jq curl git
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends jq curl git libxml2-utils
 
       - name: Resolve sources and Ace 5 matrix
         id: sources
@@ -85,15 +86,94 @@ jobs:
             echo "wild_release=$(jq -r '.wild_release' <<< "$sources")"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Audit WildKernel stability contract
+        id: wild_audit
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WILD_REPO: WildKernels/OnePlus_KernelSU_SUSFS
+          WILD_TAG: ${{ steps.sources.outputs.wild_release }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p source-snapshot
+          [[ ! -f resolved-sources.json ]] || cp resolved-sources.json source-snapshot/resolved-sources.json
+          [[ ! -f ace5-matrix.json ]] || cp ace5-matrix.json source-snapshot/ace5-matrix.json
+          set +e
+          if [[ -n "$WILD_TAG" ]]; then
+            bash scripts/audit_wild_release.sh --tag "$WILD_TAG" --output source-snapshot/wild-audit.json
+          fi
+          set -e
+          if [[ ! -s source-snapshot/wild-audit.json ]]; then
+            cat > source-snapshot/wild-audit.json <<EOF
+          {
+            "status": "fail",
+            "repository": "${WILD_REPO}",
+            "candidate": {"tag":"${WILD_TAG}"},
+            "baseline": {},
+            "compare": {"url":"","status":"","files":[],"commits":[]},
+            "control_plane": {"candidate":{},"baseline":{},"changes":[]},
+            "ace5": {"configs":[],"manifests":[],"path_changes":{},"config_schema":[],"schema_errors":[],"contract_errors":[],"manifest_errors":[]},
+            "reasons": ["Source resolution failed before WildKernel audit could run"],
+            "run_url": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          }
+          EOF
+          fi
+          if [[ -s source-snapshot/resolved-sources.json ]]; then
+            jq --slurpfile sources source-snapshot/resolved-sources.json '
+              .source_snapshot = {
+                wild_sha: $sources[0].wild_sha,
+                susfs_sha: $sources[0].susfs_sha,
+                kernel_patches_sha: $sources[0].kernel_patches_sha
+              }
+            ' source-snapshot/wild-audit.json > source-snapshot/wild-audit.tmp
+            mv source-snapshot/wild-audit.tmp source-snapshot/wild-audit.json
+            if ! jq -e '
+              .candidate.commit == .source_snapshot.wild_sha and
+              .candidate.susfs_commit == .source_snapshot.susfs_sha and
+              .candidate.kernel_patches_commit == .source_snapshot.kernel_patches_sha
+            ' source-snapshot/wild-audit.json >/dev/null; then
+              jq --arg reason 'Resolved source snapshot differs from audited WildKernel snapshot' \
+                '.status = "fail" | .reasons += [$reason]' source-snapshot/wild-audit.json > source-snapshot/wild-audit.tmp
+              mv source-snapshot/wild-audit.tmp source-snapshot/wild-audit.json
+            fi
+          fi
+          jq -r '
+            "# WildKernel Audit\n",
+            "- Status: **\(.status)**",
+            "- Candidate: `\(.candidate.tag // "unknown")` (`\(.candidate.commit // "unknown")`)\n",
+            "## Reasons",
+            (.reasons[]? | "- \(.)"),
+            "\n## Control-plane changes",
+            (.control_plane.changes[]? | "- \(.path): `\(.baseline)` -> `\(.candidate)`"),
+            "\n## Compare",
+            "- Status: `\(.compare.status // "unknown")`",
+            "- URL: \(.compare.url // "")"
+          ' source-snapshot/wild-audit.json > source-snapshot/wild-audit.md
+
       - name: Upload source snapshot
+        if: ${{ always() && steps.checkout.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: resolved-sources
-          path: |
-            resolved-sources.json
-            ace5-matrix.json
+          path: source-snapshot
           if-no-files-found: error
           retention-days: 90
+
+      - name: Enforce WildKernel stability contract
+        if: ${{ always() }}
+        env:
+          RESOLVE_OUTCOME: ${{ steps.sources.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "$RESOLVE_OUTCOME" == success ]] || {
+            echo 'Source resolution failed; refusing to start kernel builds.' >&2
+            exit 1
+          }
+          jq -e '.status == "pass"' source-snapshot/wild-audit.json >/dev/null || {
+            echo 'WildKernel stability audit failed; refusing to start kernel builds.' >&2
+            exit 1
+          }
 
   build:
     name: Build ${{ matrix.model }}
