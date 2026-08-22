@@ -265,23 +265,30 @@ jobs:
           make -C ko-loader TARGET=aarch64-linux
           cp ko-loader/ko-loader package/bin/ko-loader-arm64
           cp -a nomount/module/. package/
-          RUN_SHA="${NOMOUNT_SHA:0:12}-$(date -u +%Y%m%d%H%M%S)"
+          NOMOUNT_BASE_VERSION=$(awk -F= '$1 == "version" { print $2; exit }' package/module.prop | tr -cd '[:alnum:]._-')
+          NOMOUNT_BASE_VERSION="${NOMOUNT_BASE_VERSION:-dev}"
+          NOMOUNT_BRANCH="${{ fromJSON(needs.resolve.outputs.sources).nomount_branch }}"
+          NOMOUNT_SHORT_SHA="${NOMOUNT_SHA:0:12}"
+          RUN_SHA="${NOMOUNT_SHORT_SHA}-$(date -u +%Y%m%d%H%M%S)"
           sed -i "s/^version=.*/version=dev-${RUN_SHA}/" package/module.prop
           sed -i "s/^versionCode=.*/versionCode=${GITHUB_RUN_ID:-0}/" package/module.prop
           sha256sum package/bin/ko-loader-arm64 > package/bin/ko-loader-arm64.sha256
           sha256sum package/bin/nm-arm64 > package/bin/nm-arm64.sha256
-          (cd package && zip -r9 "../NoMount-${NOMOUNT_SHA:0:12}.zip" .)
+          NOMOUNT_ZIP="NoMount-${NOMOUNT_BASE_VERSION}-${NOMOUNT_BRANCH}-${NOMOUNT_SHORT_SHA}.zip"
+          (cd package && zip -r9 "../${NOMOUNT_ZIP}" .)
 
       - name: Upload NoMount module
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nomount-module
           path: NoMount-*.zip
+          archive: false
+          compression-level: 0
           if-no-files-found: error
           retention-days: 90
 
   release:
-    name: Publish prerelease
+    name: Publish release
     needs: [resolve, build, nomount-module]
     if: ${{ inputs.publish_release && needs.build.result == 'success' && needs.nomount-module.result == 'success' }}
     runs-on: ubuntu-latest
@@ -289,21 +296,112 @@ jobs:
       contents: write
       actions: read
     steps:
-      - name: Download all build artifacts
+      - name: Download release artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: release-assets
           merge-multiple: true
+          skip-decompress: true
+
+      - name: Prepare release assets and notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCES: ${{ needs.resolve.outputs.sources }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mapfile -t kernel_zips < <(find release-assets -maxdepth 1 -type f -name 'AK3_*.zip' | sort)
+          mapfile -t nomount_zips < <(find release-assets -maxdepth 1 -type f -name 'NoMount-*.zip' | sort)
+          [[ "${#kernel_zips[@]}" -eq 2 ]] || { echo 'Expected exactly two kernel ZIPs' >&2; find release-assets -maxdepth 1 -type f || true; exit 1; }
+          [[ "${#nomount_zips[@]}" -eq 1 ]] || { echo 'Expected exactly one NoMount ZIP' >&2; find release-assets -maxdepth 1 -type f || true; exit 1; }
+
+          wild_release=$(jq -r '.wild_release' <<< "$SOURCES")
+          wild_sha=$(jq -r '.wild_sha' <<< "$SOURCES")
+          nomount_branch=$(jq -r '.nomount_branch' <<< "$SOURCES")
+          nomount_sha=$(jq -r '.nomount_sha' <<< "$SOURCES")
+          nomount_short_sha="${nomount_sha:0:12}"
+          nomount_asset=$(basename "${nomount_zips[0]}")
+          nomount_suffix="-${nomount_branch}-${nomount_short_sha}.zip"
+          [[ "$nomount_asset" == NoMount-*"$nomount_suffix" ]] || {
+            echo "NoMount asset has unexpected name: $nomount_asset" >&2
+            exit 1
+          }
+          nomount_version="${nomount_asset#NoMount-}"
+          nomount_version="${nomount_version%$nomount_suffix}"
+
+          find release-assets -maxdepth 1 -type f ! -name 'AK3_*.zip' ! -name "$nomount_asset" -delete
+          jq . <<< "$SOURCES" > release-assets/resolved-sources.json
+          sha256sum release-assets/*.zip | sort -k2 > release-assets/00_CHECKSUMS.txt
+
+          release_tag="ace5-${wild_release}-nm-${nomount_branch}-${nomount_short_sha}"
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            release_tag="${release_tag}-r${GITHUB_RUN_NUMBER}"
+          fi
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
+          echo "NOMOUNT_ASSET=$nomount_asset" >> "$GITHUB_ENV"
+          echo "NOMOUNT_VERSION=$nomount_version" >> "$GITHUB_ENV"
+
+          {
+            echo "# OnePlus Ace 5 Kernel 📦 NoMount (${nomount_version})"
+            echo
+            echo "**A custom OnePlus Ace 5 kernel plus a mountless NoMount add-on.**"
+            echo
+            echo "## This release contains two downloads"
+            echo
+            echo "1. **Kernel** — flash the matching \\`AK3_...zip\\` with Kernel Flasher or KernelSU Manager."
+            echo "2. **NoMount module** — install \\`${nomount_asset}\\` from KernelSU Manager Modules after rebooting into the kernel."
+            echo
+            echo "> NoMount is compiled into kernel but remains dormant until module activates it. Install both."
+            echo
+            echo "## Kernel downloads"
+            echo
+            echo "| Asset | SHA256 |"
+            echo "|---|---|"
+            for file in release-assets/AK3_*.zip; do
+              name=$(basename "$file")
+              sha=$(sha256sum "$file" | awk '{print $1}')
+              echo "| \\`${name}\\` | \\`${sha}\\` |"
+            done
+            sha=$(sha256sum "release-assets/${nomount_asset}" | awk '{print $1}')
+            echo "| \\`${nomount_asset}\\` | \\`${sha}\\` |"
+            echo
+            echo "## Build configuration"
+            echo
+            echo "| Component | Value |"
+            echo "|---|---|"
+            echo "| WildKernel release | \\`${wild_release}\\` |"
+            echo "| WildKernel commit | \\`${wild_sha}\\` |"
+            echo "| NoMount branch | \\`${nomount_branch}\\` |"
+            echo "| NoMount commit | \\`${nomount_sha}\\` |"
+            echo "| Root | ReSukiSU |"
+            echo "| Optimization | \\`${{ inputs.optimize_level }}\\` |"
+            echo "| Clean build | \\`${{ inputs.clean_build }}\\` |"
+            echo
+            echo "## Installation"
+            echo
+            echo "1. Select ZIP matching exact device and kernel version."
+            echo "2. Keep stock boot image for rollback."
+            echo "3. Flash kernel ZIP with Kernel Flasher."
+            echo "4. Boot and install NoMount module from KernelSU Manager."
+            echo "5. Reboot again."
+            echo
+            echo "## Features"
+            echo
+            echo "ReSukiSU, SUSFS, NoMount, BBG, BBRv1/v3, CAKE/PIE/FQ_PIE, WireGuard, IP Set, IPv6 NAT, TTL/HL, ThinLTO, Unicode fix, Droidspaces, NTSync, and TMPFS ACL/XATTR."
+            echo
+            echo "## Sources"
+            echo
+            echo "See \\`resolved-sources.json\\` and \\`00_CHECKSUMS.txt\\` attached to this release."
+            echo
+            echo "Build run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > release-assets/00_DOWNLOADS.md
 
       - name: Create prerelease
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          tag="manual-ace5-${GITHUB_RUN_NUMBER}"
-          jq . <<< '${{ needs.resolve.outputs.sources }}' > release-assets/resolved-sources.json
-          gh release create "$tag" release-assets/* \
+          gh release create "$RELEASE_TAG" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --prerelease \
-            --title "OnePlus Ace 5 A16 manual build ${{ needs.resolve.outputs.wild_release }}" \
-            --notes "Sources and target matrix are in resolved-sources.json. Flash manually after device validation."
+            --title "OnePlus Ace 5 Kernel 📦 NoMount (${NOMOUNT_VERSION})" \
+            --notes-file release-assets/00_DOWNLOADS.md

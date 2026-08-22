@@ -4,6 +4,7 @@ set -euo pipefail
 repo="${WILD_REPO:-WildKernels/OnePlus_KernelSU_SUSFS}"
 resukisu_repo="${RESUKISU_REPO:-ReSukiSU/ReSukiSU}"
 nomount_repo="${NOMOUNT_REPO:-maxsteeel/nomount}"
+nomount_branch="${NOMOUNT_BRANCH:-dev}"
 kernel_patches_repo="${KERNEL_PATCHES_REPO:-WildKernels/kernel_patches}"
 wild_release_json=$(mktemp)
 trap 'rm -f "$wild_release_json"' EXIT
@@ -56,7 +57,7 @@ resukisu_sha=$(api "https://api.github.com/repos/${resukisu_repo}/commits/main" 
 nomount_sha=''
 nomount_run_url=''
 for page in 1 2 3 4 5; do
-  runs=$(api "https://api.github.com/repos/${nomount_repo}/actions/runs?branch=dev&per_page=100&page=${page}")
+  runs=$(api "https://api.github.com/repos/${nomount_repo}/actions/runs?branch=${nomount_branch}&per_page=100&page=${page}")
   while IFS=$'\t' read -r sha status conclusion url; do
     [[ "$status" == completed && "$conclusion" == success ]] || continue
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
@@ -72,7 +73,7 @@ for page in 1 2 3 4 5; do
     break 2
   done < <(jq -r '.workflow_runs[] | [.head_sha,.status,.conclusion,.html_url] | @tsv' <<< "$runs")
 done
-[[ "$nomount_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'No green NoMount dev commit found' >&2; exit 1; }
+[[ "$nomount_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "No green NoMount ${nomount_branch} commit found" >&2; exit 1; }
 
 kernel_patches_sha=$(api "https://api.github.com/repos/${kernel_patches_repo}/commits?sha=main&until=${wild_published_at}&per_page=1" | jq -r '.[0].sha // empty')
 [[ "$kernel_patches_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Cannot resolve kernel_patches main' >&2; exit 1; }
@@ -93,7 +94,7 @@ manifests=$(api "https://api.github.com/repos/${repo}/git/trees/${wild_sha}?recu
   jq -c '[.tree[] | select(.path | test("^manifests/a16/oneplus_ace5(_[0-9]+\\.[0-9]+\\.[0-9]+)?_w\\.xml$")) | .path]')
 [[ "$manifests" != '[]' ]] || { echo "No Ace 5 A16 manifests in $wild_tag" >&2; exit 1; }
 
-jq -n \
+  jq -n \
   --arg wild_repo "$repo" \
   --arg wild_tag "$wild_tag" \
   --arg wild_sha "$wild_sha" \
@@ -102,6 +103,7 @@ jq -n \
   --arg resukisu_repo "$resukisu_repo" \
   --arg resukisu_sha "$resukisu_sha" \
   --arg nomount_repo "$nomount_repo" \
+  --arg nomount_branch "$nomount_branch" \
   --arg nomount_sha "$nomount_sha" \
   --arg nomount_run_url "$nomount_run_url" \
   --arg kernel_patches_repo "$kernel_patches_repo" \
@@ -114,7 +116,7 @@ jq -n \
   --argjson manifests "$manifests" \
   '{wild_repo:$wild_repo,wild_release:$wild_tag,wild_sha:$wild_sha,wild_published_at:$wild_published_at,susfs_sha:$susfs_sha,
     resukisu_repo:$resukisu_repo,resukisu_sha:$resukisu_sha,
-    nomount_repo:$nomount_repo,nomount_sha:$nomount_sha,nomount_run_url:$nomount_run_url,
+     nomount_repo:$nomount_repo,nomount_branch:$nomount_branch,nomount_sha:$nomount_sha,nomount_run_url:$nomount_run_url,
     kernel_patches_repo:$kernel_patches_repo,kernel_patches_sha:$kernel_patches_sha,
     bbg_repo:$bbg_repo,bbg_sha:$bbg_sha,
     loader_repo:$loader_repo,loader_sha:$loader_sha,
