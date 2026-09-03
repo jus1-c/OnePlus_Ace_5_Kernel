@@ -22,6 +22,12 @@ sleep 2
 svc nfc enable || true
 cmd nfc enable-nfc || true
 
+if dumpsys nfc 2>/dev/null | grep -q 'mState=on'; then
+  log "NFC restored: mState=on"
+else
+  log "WARNING: NFC mState not confirmed on"
+fi
+
 nh_release_lock "$RADIO"
 log "RESTORED to stock"
 echo "NFC restored to stock."
