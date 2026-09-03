@@ -1,0 +1,46 @@
+name: Build NetHunter Takeover Modules
+inputs:
+  target:
+    required: true
+  version:
+    required: true
+outputs:
+  zip_path:
+    value: ${{ steps.pack.outputs.zip_path }}
+runs:
+  using: composite
+  steps:
+    - name: Build patched Wi-Fi module
+      shell: bash
+      run: bash scripts/nethunter/build_patched_wifi.sh ${{ inputs.target }}
+
+    - name: Build bt_vhci module
+      shell: bash
+      run: bash scripts/nethunter/build_btvhci.sh ${{ inputs.target }}
+
+    - name: Build bluebinder
+      shell: bash
+      run: bash scripts/nethunter/build_bluebinder.sh
+
+    - name: Build nci_raw_tool
+      shell: bash
+      run: cd nethunter/nfc && make && cd ../..
+
+    - name: Pack takeover ZIP
+      id: pack
+      shell: bash
+      run: |
+        bash scripts/nethunter/pack_takeover_zip.sh ${{ inputs.target }} ${{ inputs.version }}
+        echo "zip_path=dist/nethunter-takeover-${{ inputs.target }}-${{ inputs.version }}.zip" >> $GITHUB_OUTPUT
+
+    - name: Generate provenance entry
+      shell: bash
+      run: |
+        cat > dist/provenance-${{ inputs.target }}.json <<EOF
+        {
+          "target": "${{ inputs.target }}",
+          "wifi_patch_commits": ["25875eb", "be87f12"],
+          "bluebinder_commit": "c3e1b155",
+          "module_sha256": "$(sha256sum dist/nethunter-takeover-${{ inputs.target }}-${{ inputs.version }}.zip | cut -d' ' -f1)"
+        }
+        EOF
