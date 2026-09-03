@@ -19,7 +19,14 @@ log "Releasing Bluetooth..."
 
 # Kill bluebinder
 if [ -f /data/adb/nethunter/bluebinder.pid ]; then
-  kill "$(cat /data/adb/nethunter/bluebinder.pid)" 2>/dev/null || true
+  BPID="$(cat /data/adb/nethunter/bluebinder.pid)"
+  kill "$BPID" 2>/dev/null || true
+  sleep 1
+  if kill -0 "$BPID" 2>/dev/null; then
+    log "WARN: bluebinder ($BPID) still alive, sending SIGKILL"
+    kill -9 "$BPID" 2>/dev/null || true
+    sleep 1
+  fi
   rm -f /data/adb/nethunter/bluebinder.pid
 fi
 

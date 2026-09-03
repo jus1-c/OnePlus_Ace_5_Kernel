@@ -21,6 +21,13 @@ if [ "$result" != "OK" ]; then
   exit 1
 fi
 
+# Gate: patched KO must exist before we touch anything
+if [ ! -f "$VHCI_KO" ]; then
+  log "ABORT: patched KO not found at $VHCI_KO"
+  echo "ABORT: patched KO not found at $VHCI_KO" >&2
+  exit 1
+fi
+
 # Gate: acquire lock
 if ! nh_acquire_lock "$RADIO"; then
   log "ABORT: lock failed"
