@@ -277,6 +277,7 @@ jobs:
           RUN_SHA="${NOMOUNT_SHORT_SHA}-$(date -u +%Y%m%d%H%M%S)"
           sed -i "s/^version=.*/version=dev-${RUN_SHA}/" package/module.prop
           sed -i "s/^versionCode=.*/versionCode=${GITHUB_RUN_ID:-0}/" package/module.prop
+          echo "updateJson=https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/update.json" >> package/module.prop
           sha256sum package/bin/ko-loader-arm64 > package/bin/ko-loader-arm64.sha256
           sha256sum package/bin/nm-arm64 > package/bin/nm-arm64.sha256
           NOMOUNT_ZIP="NoMount-${NOMOUNT_BASE_VERSION}-${NOMOUNT_BRANCH}-${NOMOUNT_SHORT_SHA}.zip"
@@ -411,10 +412,13 @@ jobs:
           nomount_branch=$(jq -r '.nomount_branch' <<< "$SOURCES")
           nomount_asset=$(basename "$(find release-assets -maxdepth 1 -type f -name 'NoMount-*.zip' | head -1)")
           zip_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${nomount_asset}"
+          MODULE_VERSION=$(unzip -p "release-assets/${nomount_asset}" module.prop | awk -F= '$1 == "version" { print $2; exit }')
+          MODULE_VERSION_CODE=$(unzip -p "release-assets/${nomount_asset}" module.prop | awk -F= '$1 == "versionCode" { print $2; exit }')
+          [[ -n "$MODULE_VERSION" && -n "$MODULE_VERSION_CODE" ]] || { echo "Failed to extract version/versionCode" >&2; exit 1; }
           cat > release-assets/update.json <<EOF
           {
-            "version": "${NOMOUNT_VERSION}",
-            "versionCode": ${GITHUB_RUN_ID},
+            "version": "${MODULE_VERSION}",
+            "versionCode": ${MODULE_VERSION_CODE},
             "zipUrl": "${zip_url}",
             "changelog": "Build from nomount/${nomount_branch}@${nomount_short_sha}\nRun: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           }
