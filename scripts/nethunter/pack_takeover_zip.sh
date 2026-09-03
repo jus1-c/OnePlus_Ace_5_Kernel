@@ -17,17 +17,43 @@ cp -r nethunter/wifi "$PACK_DIR/"
 cp -r nethunter/bt "$PACK_DIR/"
 cp -r nethunter/nfc "$PACK_DIR/"
 
-# Copy built binaries
-cp "$BUILD_DIR/qca_cld3_kiwi_v2.ko" "$PACK_DIR/vendor_dlkm_override/"
-cp "$BUILD_DIR/bt_vhci.ko" "$PACK_DIR/vendor_dlkm_override/"
-cp /tmp/nh-build/bluebinder/bluebinder "$PACK_DIR/system/bin/"
-cp nethunter/nfc/nci_raw_tool "$PACK_DIR/system/bin/"
+# Copy built binaries (skip missing — Phase 0 spike, best-effort)
+BUILT_COMPONENTS=""
+if [ -f "$BUILD_DIR/qca_cld3_kiwi_v2.ko" ]; then
+  cp "$BUILD_DIR/qca_cld3_kiwi_v2.ko" "$PACK_DIR/vendor_dlkm_override/"
+  BUILT_COMPONENTS="${BUILT_COMPONENTS}wifi,"
+fi
+if [ -f "$BUILD_DIR/bt_vhci.ko" ]; then
+  cp "$BUILD_DIR/bt_vhci.ko" "$PACK_DIR/vendor_dlkm_override/"
+  BUILT_COMPONENTS="${BUILT_COMPONENTS}bt,"
+fi
+if [ -f /tmp/nh-build/bluebinder/bluebinder ]; then
+  cp /tmp/nh-build/bluebinder/bluebinder "$PACK_DIR/system/bin/"
+  BUILT_COMPONENTS="${BUILT_COMPONENTS}bluebinder,"
+fi
+if [ -f nethunter/nfc/nci_raw_tool ]; then
+  cp nethunter/nfc/nci_raw_tool "$PACK_DIR/system/bin/"
+  BUILT_COMPONENTS="${BUILT_COMPONENTS}nfc,"
+fi
 
-# Generate module.prop from template
-SHA_QCA=$(sha256sum "$PACK_DIR/vendor_dlkm_override/qca_cld3_kiwi_v2.ko" | cut -d' ' -f1)
-SHA_BTVHCI=$(sha256sum "$PACK_DIR/vendor_dlkm_override/bt_vhci.ko" | cut -d' ' -f1)
-VERMAGIC=$(modinfo "$PACK_DIR/vendor_dlkm_override/qca_cld3_kiwi_v2.ko" | grep vermagic | awk '{print $2}')
-SCMVERSION=$(modinfo "$PACK_DIR/vendor_dlkm_override/qca_cld3_kiwi_v2.ko" | grep scmversion | awk '{print $2}')
+if [ -z "$BUILT_COMPONENTS" ]; then
+  echo "WARNING: No components built. Creating scripts-only ZIP." >&2
+fi
+echo "Built components: ${BUILT_COMPONENTS:-none}"
+
+# Generate module.prop from template (use placeholders for missing modules)
+SHA_QCA="not_built"
+SHA_BTVHCI="not_built"
+VERMAGIC="unknown"
+SCMVERSION="unknown"
+if [ -f "$PACK_DIR/vendor_dlkm_override/qca_cld3_kiwi_v2.ko" ]; then
+  SHA_QCA=$(sha256sum "$PACK_DIR/vendor_dlkm_override/qca_cld3_kiwi_v2.ko" | cut -d' ' -f1)
+  VERMAGIC=$(modinfo "$PACK_DIR/vendor_dlkm_override/qca_cld3_kiwi_v2.ko" | grep vermagic | awk '{print $2}' || echo "unknown")
+  SCMVERSION=$(modinfo "$PACK_DIR/vendor_dlkm_override/qca_cld3_kiwi_v2.ko" | grep scmversion | awk '{print $2}' || echo "unknown")
+fi
+if [ -f "$PACK_DIR/vendor_dlkm_override/bt_vhci.ko" ]; then
+  SHA_BTVHCI=$(sha256sum "$PACK_DIR/vendor_dlkm_override/bt_vhci.ko" | cut -d' ' -f1)
+fi
 
 sed -e "s/@@TARGET@@/$TARGET/g" \
     -e "s/@@VERSION@@/$VERSION/g" \
