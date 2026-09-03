@@ -269,15 +269,23 @@ jobs:
           test "$(git -C ko-loader rev-parse HEAD)" = "${{ fromJSON(needs.resolve.outputs.sources).loader_sha }}"
           make -C ko-loader TARGET=aarch64-linux
           cp ko-loader/ko-loader package/bin/ko-loader-arm64
-          cp -a nomount/module/. package/
-          NOMOUNT_BASE_VERSION=$(awk -F= '$1 == "version" { print $2; exit }' package/module.prop | tr -cd '[:alnum:]._-')
+          # Extract base version directly from checked-out source BEFORE any modifications
+          NOMOUNT_BASE_VERSION=$(awk -F= '$1 == "version" { print $2; exit }' nomount/module/module.prop | tr -cd '[:alnum:]._-')
           NOMOUNT_BASE_VERSION="${NOMOUNT_BASE_VERSION:-dev}"
+          echo "Upstream NoMount version: ${NOMOUNT_BASE_VERSION} (from commit ${NOMOUNT_SHA:0:12})"
+          cp -a nomount/module/. package/
           NOMOUNT_BRANCH="${{ fromJSON(needs.resolve.outputs.sources).nomount_branch }}"
           NOMOUNT_SHORT_SHA="${NOMOUNT_SHA:0:12}"
           RUN_SHA="${NOMOUNT_SHORT_SHA}-$(date -u +%Y%m%d%H%M%S)"
           sed -i "s/^version=.*/version=dev-${RUN_SHA}/" package/module.prop
           sed -i "s/^versionCode=.*/versionCode=${GITHUB_RUN_ID:-0}/" package/module.prop
           echo "updateJson=https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/update.json" >> package/module.prop
+          # Validate version/versionCode were set correctly
+          FINAL_VERSION=$(awk -F= '$1 == "version" { print $2; exit }' package/module.prop)
+          FINAL_VERSION_CODE=$(awk -F= '$1 == "versionCode" { print $2; exit }' package/module.prop)
+          [[ -n "$FINAL_VERSION" && "$FINAL_VERSION" != "dev-${RUN_SHA}" ]] || { echo "ERROR: version not set correctly in module.prop" >&2; exit 1; }
+          [[ "$FINAL_VERSION_CODE" == "${GITHUB_RUN_ID}" ]] || { echo "ERROR: versionCode mismatch (expected ${GITHUB_RUN_ID}, got ${FINAL_VERSION_CODE})" >&2; exit 1; }
+          echo "Final module.prop version=${FINAL_VERSION} versionCode=${FINAL_VERSION_CODE}"
           sha256sum package/bin/ko-loader-arm64 > package/bin/ko-loader-arm64.sha256
           sha256sum package/bin/nm-arm64 > package/bin/nm-arm64.sha256
           NOMOUNT_ZIP="NoMount-${NOMOUNT_BASE_VERSION}-${NOMOUNT_BRANCH}-${NOMOUNT_SHORT_SHA}.zip"
@@ -414,7 +422,11 @@ jobs:
           zip_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${nomount_asset}"
           MODULE_VERSION=$(unzip -p "release-assets/${nomount_asset}" module.prop | awk -F= '$1 == "version" { print $2; exit }')
           MODULE_VERSION_CODE=$(unzip -p "release-assets/${nomount_asset}" module.prop | awk -F= '$1 == "versionCode" { print $2; exit }')
-          [[ -n "$MODULE_VERSION" && -n "$MODULE_VERSION_CODE" ]] || { echo "Failed to extract version/versionCode" >&2; exit 1; }
+          [[ -n "$MODULE_VERSION" && -n "$MODULE_VERSION_CODE" ]] || { echo "ERROR: Failed to extract version/versionCode from ${nomount_asset}" >&2; exit 1; }
+          [[ "$MODULE_VERSION_CODE" == "${GITHUB_RUN_ID}" ]] || { echo "ERROR: versionCode mismatch in ZIP (expected ${GITHUB_RUN_ID}, got ${MODULE_VERSION_CODE})" >&2; exit 1; }
+          # Verify updateJson field exists in module.prop
+          unzip -p "release-assets/${nomount_asset}" module.prop | grep -q '^updateJson=' || { echo "ERROR: updateJson missing from module.prop" >&2; exit 1; }
+          echo "Validated: version=${MODULE_VERSION} versionCode=${MODULE_VERSION_CODE} updateJson=present"
           cat > release-assets/update.json <<EOF
           {
             "version": "${MODULE_VERSION}",
