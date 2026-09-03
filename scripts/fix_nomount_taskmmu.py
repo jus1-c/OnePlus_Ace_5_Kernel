@@ -28,7 +28,7 @@ if count == 0:
     print('ERROR: block-scope extern not found in task_mmu.c', file=sys.stderr)
     sys.exit(1)
 
-marker = 'static void show_map_vma'
+marker = 'show_map_vma('
 idx = content.find(marker)
 if idx == -1:
     print('ERROR: show_map_vma not found', file=sys.stderr)
