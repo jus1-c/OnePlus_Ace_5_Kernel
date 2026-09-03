@@ -50,16 +50,18 @@ insmod "$VHCI_KO" || {
 }
 
 # Start bluebinder daemon
-"$BLUEBINDER" --hci 0 &
+"$BLUEBINDER" --hci 0 </dev/null >/dev/null 2>&1 &
 echo $! > /data/adb/nethunter/bluebinder.pid
 sleep 3
 
 # Wait for hci0 (10s timeout)
-for i in $(seq 1 10); do
+i=1
+while [ $i -le 10 ]; do
   if hciconfig hci0 >/dev/null 2>&1; then
     break
   fi
   sleep 1
+  i=$((i + 1))
 done
 
 if ! hciconfig hci0 >/dev/null 2>&1; then

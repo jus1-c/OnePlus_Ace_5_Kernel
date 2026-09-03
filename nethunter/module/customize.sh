@@ -10,7 +10,7 @@ ui_print "NetHunter Takeover for $TARGET"
 
 # Fail-closed: verify target matches
 ACTUAL_MODEL=$(getprop ro.product.model)
-if [ "$ACTUAL_MODEL" != "$TARGET" ] && [ "$TARGET" != "OP-ACE-5" ]; then
+if [ "$ACTUAL_MODEL" != "$TARGET" ]; then
   ui_print "ERROR: Target mismatch. Expected $TARGET, got $ACTUAL_MODEL"
   abort "Installation aborted: target mismatch"
 fi

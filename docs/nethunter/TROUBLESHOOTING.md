@@ -26,7 +26,7 @@ grep scmversion /data/adb/modules/nethunter_takeover_OP-ACE-5/module.prop
 **Recovery:**
 ```bash
 # Remove stale locks
-rm -f /dev/shm/nh_lock_wifi /dev/shm/nh_lock_bt /dev/shm/nh_lock_nfc
+rm -f /data/adb/nethunter/*.lock
 
 # Reset state to released
 /data/adb/modules/nethunter_takeover_OP-ACE-5/framework/nh-state.sh set wifi released
@@ -37,7 +37,7 @@ rm -f /dev/shm/nh_lock_wifi /dev/shm/nh_lock_bt /dev/shm/nh_lock_nfc
 /data/adb/modules/nethunter_takeover_OP-ACE-5/framework/nh-state.sh get wifi
 ```
 
-Locks are advisory (flock-based). A reboot also clears them since `/dev/shm` is tmpfs.
+Locks are advisory (flock-based). A reboot also clears them.
 
 ## HAL Quiesce Timeout
 
@@ -132,9 +132,9 @@ The stock NFC HAL sometimes fails to re-bind after raw NCI access. A toggle forc
 export NH_DEBUG=1
 
 # Check state files directly
-cat /dev/shm/nh_state_wifi
-cat /dev/shm/nh_state_bt
-cat /dev/shm/nh_state_nfc
+cat /data/adb/nethunter/wifi.state
+cat /data/adb/nethunter/bt.state
+cat /data/adb/nethunter/nfc.state
 
 # Monitor kernel messages
 dmesg | grep -i nethunter

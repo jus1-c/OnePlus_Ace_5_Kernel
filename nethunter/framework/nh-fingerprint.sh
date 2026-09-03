@@ -49,5 +49,5 @@ nh_get_running_vermagic() {
 }
 
 nh_get_running_scmversion() {
-  cat /proc/version 2>/dev/null | grep -oP 'scmversion\s+\K\S+' || echo "UNKNOWN"
+  cat /proc/version 2>/dev/null | sed -n 's/.*scmversion[[:space:]]\+\([^ ]*\).*/\1/p' || echo "UNKNOWN"
 }
