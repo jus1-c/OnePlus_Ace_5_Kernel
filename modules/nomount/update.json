@@ -1,6 +1,6 @@
 {
   "version": "dev-b8d268353b4e-20260903195957",
-  "versionCode": 33799567554,
+  "versionCode": 21,
   "zipUrl": "https://github.com/jus1-c/OnePlus_Ace_5_Kernel/releases/download/ace5-v2.2.0-r4-nm-dev-b8d268353b4e/NoMount-v2.0.0-dev-b8d268353b4e.zip",
-  "changelog": "Build from nomount/dev@b8d268353b4e\nRun: https://github.com/jus1-c/OnePlus_Ace_5_Kernel/actions/runs/33799567554"
+  "changelog": "Fix versionCode overflow (RUN_ID->RUN_NUMBER) for module OTA"
 }
