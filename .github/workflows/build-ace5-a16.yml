@@ -24,6 +24,11 @@ on:
         required: true
         type: boolean
         default: false
+      prerelease:
+        description: Mark release as pre-release
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -128,12 +133,12 @@ jobs:
               }
             ' source-snapshot/wild-audit.json > source-snapshot/wild-audit.tmp
             mv source-snapshot/wild-audit.tmp source-snapshot/wild-audit.json
+            # SUSFS now sourced from upstream GitLab, not WildKernels — skip SUSFS SHA comparison
             if ! jq -e '
               .candidate.commit == .source_snapshot.wild_sha and
-              .candidate.susfs_commit == .source_snapshot.susfs_sha and
               .candidate.kernel_patches_commit == .source_snapshot.kernel_patches_sha
             ' source-snapshot/wild-audit.json >/dev/null; then
-              jq --arg reason 'Resolved source snapshot differs from audited WildKernel snapshot' \
+              jq --arg reason 'Resolved source snapshot differs from audited WildKernel snapshot (wild_sha or kernel_patches mismatch)' \
                 '.status = "fail" | .reasons += [$reason]' source-snapshot/wild-audit.json > source-snapshot/wild-audit.tmp
               mv source-snapshot/wild-audit.tmp source-snapshot/wild-audit.json
             fi
@@ -225,33 +230,6 @@ jobs:
         with:
           name: provenance-${{ matrix.model }}
           path: source-snapshot/resolved-sources.json
-          retention-days: 90
-
-  nethunter-takeover:
-    name: NetHunter Takeover ${{ matrix.model }}
-    needs: [resolve, build]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with:
-          fetch-depth: 1
-
-      - name: Build takeover modules
-        uses: ./.github/actions/build-nethunter-takeover
-        with:
-          target: ${{ matrix.model }}
-          version: ${{ github.run_number }}
-
-      - name: Upload takeover ZIP
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: nethunter-takeover-${{ matrix.model }}
-          path: |
-            dist/nethunter-takeover-*.zip
-            dist/provenance-*.json
           retention-days: 90
 
   nomount-module:
@@ -423,12 +401,33 @@ jobs:
             echo "Build run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } > release-assets/00_DOWNLOADS.md
 
+      - name: Generate update.json for NoMount module
+        env:
+          SOURCES: ${{ needs.resolve.outputs.sources }}
+        run: |
+          set -euo pipefail
+          nomount_sha=$(jq -r '.nomount_sha' <<< "$SOURCES")
+          nomount_short_sha="${nomount_sha:0:12}"
+          nomount_branch=$(jq -r '.nomount_branch' <<< "$SOURCES")
+          nomount_asset=$(basename "$(find release-assets -maxdepth 1 -type f -name 'NoMount-*.zip' | head -1)")
+          zip_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${nomount_asset}"
+          cat > release-assets/update.json <<EOF
+          {
+            "version": "${NOMOUNT_VERSION}",
+            "versionCode": ${GITHUB_RUN_ID},
+            "zipUrl": "${zip_url}",
+            "changelog": "Build from nomount/${nomount_branch}@${nomount_short_sha}\nRun: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          }
+          EOF
+          echo "Generated update.json:"
+          cat release-assets/update.json
+
       - name: Create prerelease
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$RELEASE_TAG" release-assets/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --prerelease \
-            --title "OnePlus Ace 5 Kernel 📦 NoMount (${NOMOUNT_VERSION})" \
-            --notes-file release-assets/00_DOWNLOADS.md
+          RELEASE_ARGS=("$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --title "OnePlus Ace 5 Kernel 📦 NoMount (${NOMOUNT_VERSION})" --notes-file release-assets/00_DOWNLOADS.md)
+          if [[ "${{ inputs.prerelease }}" == "true" ]]; then
+            RELEASE_ARGS+=(--prerelease)
+          fi
+          gh release create "${RELEASE_ARGS[@]}"

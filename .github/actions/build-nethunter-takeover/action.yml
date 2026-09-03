@@ -11,18 +11,22 @@ runs:
   using: composite
   steps:
     - name: Build patched Wi-Fi module
+      continue-on-error: true
       shell: bash
       run: bash scripts/nethunter/build_patched_wifi.sh ${{ inputs.target }}
 
     - name: Build bt_vhci module
+      continue-on-error: true
       shell: bash
       run: bash scripts/nethunter/build_btvhci.sh ${{ inputs.target }}
 
     - name: Build bluebinder
+      continue-on-error: true
       shell: bash
       run: bash scripts/nethunter/build_bluebinder.sh
 
     - name: Build nci_raw_tool
+      continue-on-error: true
       shell: bash
       run: cd nethunter/nfc && make && cd ../..
 

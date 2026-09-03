@@ -1,0 +1,252 @@
+name: Build NetHunter Takeover
+
+on:
+  workflow_dispatch:
+    inputs:
+      optimize_level:
+        description: Compiler optimization level
+        required: true
+        type: choice
+        options: [O2, O3]
+        default: O2
+      clean_build:
+        description: Disable ccache for this run
+        required: true
+        type: boolean
+        default: false
+      debug:
+        description: Upload debug build artifacts
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CHECKOUT_SHA: d23441a48e516b6c34aea4fa41551a30e30af803
+  DOWNLOAD_ARTIFACT_SHA: 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+  UPLOAD_ARTIFACT_SHA: 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+
+jobs:
+  resolve:
+    name: Resolve and audit immutable sources
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.sources.outputs.matrix }}
+      sources: ${{ steps.sources.outputs.sources }}
+      wild_release: ${{ steps.sources.outputs.wild_release }}
+    steps:
+      - name: Checkout fork scripts
+        id: checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 1
+
+      - name: Install resolver dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends jq curl git libxml2-utils
+
+      - name: Resolve sources and Ace 5 matrix
+        id: sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sources=$(bash scripts/resolve_sources.sh)
+          wild_repo=$(jq -r '.wild_repo' <<< "$sources")
+          wild_sha=$(jq -r '.wild_sha' <<< "$sources")
+          mapfile -t configs < <(jq -r '.configs[]' <<< "$sources")
+          matrix='[]'
+          for config_path in "${configs[@]}"; do
+            config=$(curl --fail --location --silent --show-error \
+              "https://raw.githubusercontent.com/${wild_repo}/${wild_sha}/${config_path}")
+            manifest=$(jq -r '.manifest' <<< "$config")
+            manifest_url="https://raw.githubusercontent.com/${wild_repo}/${wild_sha}/manifests/a16/${manifest}"
+            entry=$(jq -c --arg manifest_url "$manifest_url" '. + {manifest:$manifest_url, ksu_type:"ReSukiSU", uname:"OP-ACE5-RESUKISU", blacklist_modules:""}' <<< "$config")
+            matrix=$(jq -c --argjson entry "$entry" '. + [$entry]' <<< "$matrix")
+          done
+          [[ $(jq 'length' <<< "$matrix") -gt 0 ]] || { echo 'Empty Ace 5 matrix' >&2; exit 1; }
+          printf '%s\n' "$sources" > resolved-sources.json
+          printf '%s\n' "$matrix" > ace5-matrix.json
+          matrix_json=$(jq -cn --argjson include "$matrix" '{include:$include}')
+          {
+            echo "sources<<EOF"
+            echo "$sources"
+            echo EOF
+            echo "matrix<<EOF"
+            echo "$matrix_json"
+            echo EOF
+            echo "wild_release=$(jq -r '.wild_release' <<< "$sources")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Audit WildKernel stability contract
+        id: wild_audit
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WILD_REPO: WildKernels/OnePlus_KernelSU_SUSFS
+          WILD_TAG: ${{ steps.sources.outputs.wild_release }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p source-snapshot
+          [[ ! -f resolved-sources.json ]] || cp resolved-sources.json source-snapshot/resolved-sources.json
+          [[ ! -f ace5-matrix.json ]] || cp ace5-matrix.json source-snapshot/ace5-matrix.json
+          set +e
+          if [[ -n "$WILD_TAG" ]]; then
+            bash scripts/audit_wild_release.sh --tag "$WILD_TAG" --output source-snapshot/wild-audit.json
+          fi
+          set -e
+          if [[ ! -s source-snapshot/wild-audit.json ]]; then
+            cat > source-snapshot/wild-audit.json <<EOF
+          {
+            "status": "fail",
+            "repository": "${WILD_REPO}",
+            "candidate": {"tag":"${WILD_TAG}"},
+            "baseline": {},
+            "compare": {"url":"","status":"","files":[],"commits":[]},
+            "control_plane": {"candidate":{},"baseline":{},"changes":[]},
+            "ace5": {"configs":[],"manifests":[],"path_changes":{},"config_schema":[],"schema_errors":[],"contract_errors":[],"manifest_errors":[]},
+            "reasons": ["Source resolution failed before WildKernel audit could run"],
+            "run_url": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          }
+          EOF
+          fi
+          if [[ -s source-snapshot/resolved-sources.json ]]; then
+            jq --slurpfile sources source-snapshot/resolved-sources.json '
+              .source_snapshot = {
+                wild_sha: $sources[0].wild_sha,
+                susfs_sha: $sources[0].susfs_sha,
+                kernel_patches_sha: $sources[0].kernel_patches_sha
+              }
+            ' source-snapshot/wild-audit.json > source-snapshot/wild-audit.tmp
+            mv source-snapshot/wild-audit.tmp source-snapshot/wild-audit.json
+            # SUSFS now sourced from upstream GitLab, not WildKernels — skip SUSFS SHA comparison
+            if ! jq -e '
+              .candidate.commit == .source_snapshot.wild_sha and
+              .candidate.kernel_patches_commit == .source_snapshot.kernel_patches_sha
+            ' source-snapshot/wild-audit.json >/dev/null; then
+              jq --arg reason 'Resolved source snapshot differs from audited WildKernel snapshot (wild_sha or kernel_patches mismatch)' \
+                '.status = "fail" | .reasons += [$reason]' source-snapshot/wild-audit.json > source-snapshot/wild-audit.tmp
+              mv source-snapshot/wild-audit.tmp source-snapshot/wild-audit.json
+            fi
+          fi
+          jq -r '
+            "# WildKernel Audit\n",
+            "- Status: **\(.status)**",
+            "- Candidate: `\(.candidate.tag // "unknown")` (`\(.candidate.commit // "unknown")`)\n",
+            "## Reasons",
+            (.reasons[]? | "- \(.)"),
+            "\n## Control-plane changes",
+            (.control_plane.changes[]? | "- \(.path): `\(.baseline)` -> `\(.candidate)`"),
+            "\n## Compare",
+            "- Status: `\(.compare.status // "unknown")`",
+            "- URL: \(.compare.url // "")"
+          ' source-snapshot/wild-audit.json > source-snapshot/wild-audit.md
+
+      - name: Upload source snapshot
+        if: ${{ always() && steps.checkout.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: resolved-sources
+          path: source-snapshot
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce WildKernel stability contract
+        if: ${{ always() }}
+        env:
+          RESOLVE_OUTCOME: ${{ steps.sources.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "$RESOLVE_OUTCOME" == success ]] || {
+            echo 'Source resolution failed; refusing to start kernel builds.' >&2
+            exit 1
+          }
+          jq -e '.status == "pass"' source-snapshot/wild-audit.json >/dev/null || {
+            echo 'WildKernel stability audit failed; refusing to start kernel builds.' >&2
+            exit 1
+          }
+
+  build:
+    name: Build ${{ matrix.model }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 1
+
+      - name: Install base dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git curl ca-certificates build-essential clang lld flex bison libelf-dev libssl-dev \
+            libncurses-dev zlib1g-dev liblz4-tool libxml2-utils rsync unzip dwarves file \
+            python3 ccache jq bc dos2unix kmod libdw-dev elfutils pigz aria2 zip
+
+      - name: Read resolved source snapshot
+        run: |
+          set -euo pipefail
+          mkdir -p source-snapshot
+          echo '${{ needs.resolve.outputs.sources }}' > source-snapshot/resolved-sources.json
+          jq -e '.wild_sha and .susfs_sha and .resukisu_sha and .nomount_sha' source-snapshot/resolved-sources.json >/dev/null
+
+      - name: Build kernel with ReSukiSU, SUSFS, and NoMount
+        uses: ./.github/actions/build-kernel
+        with:
+          op_config_json: ${{ toJSON(matrix) }}
+          ksu_type: ReSukiSU
+          ksu_branch_or_hash: ${{ fromJSON(needs.resolve.outputs.sources).resukisu_sha }}
+          susfs_commit_hash_or_branch: ${{ fromJSON(needs.resolve.outputs.sources).susfs_sha }}
+          nomount_commit: ${{ fromJSON(needs.resolve.outputs.sources).nomount_sha }}
+          bbg_repo: ${{ fromJSON(needs.resolve.outputs.sources).bbg_repo }}
+          bbg_commit: ${{ fromJSON(needs.resolve.outputs.sources).bbg_sha }}
+          kernel_patches_repo: ${{ fromJSON(needs.resolve.outputs.sources).kernel_patches_repo }}
+          kernel_patches_commit: ${{ fromJSON(needs.resolve.outputs.sources).kernel_patches_sha }}
+          optimize_level: ${{ inputs.optimize_level }}
+          clean: ${{ inputs.clean_build }}
+          debug: ${{ inputs.debug }}
+          github_token: ${{ github.token }}
+
+      - name: Upload source snapshot with target
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: provenance-${{ matrix.model }}
+          path: source-snapshot/resolved-sources.json
+          retention-days: 90
+
+  nethunter-takeover:
+    name: NetHunter Takeover ${{ matrix.model }}
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 1
+
+      - name: Build takeover modules
+        continue-on-error: true
+        uses: ./.github/actions/build-nethunter-takeover
+        with:
+          target: ${{ matrix.model }}
+          version: ${{ github.run_number }}
+
+      - name: Upload takeover ZIP
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nethunter-takeover-${{ matrix.model }}
+          path: |
+            dist/nethunter-takeover-*.zip
+            dist/provenance-*.json
+          retention-days: 90
+          if-no-files-found: warn

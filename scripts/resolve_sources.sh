@@ -36,20 +36,13 @@ wild_sha=$(resolve_ref "$repo" "$wild_tag")
 release_body=$(jq -r '.body // ""' <<< "$wild_release")
 wild_published_at=$(jq -r '.published_at // empty' <<< "$wild_release")
 [[ -n "$wild_published_at" ]] || { echo "Missing publish time for $wild_tag" >&2; exit 1; }
-susfs_sha=$(printf '%s\n' "$release_body" | awk '
-  /android14-6\.1/ {
-    if (match($0, /[0-9a-f]{40}/)) { print substr($0, RSTART, RLENGTH); exit }
-  }
-')
-if [[ ! "$susfs_sha" =~ ^[0-9a-f]{40}$ ]]; then
-  susfs_sha=$(api "https://api.github.com/repos/${repo}/contents/README.md?ref=${wild_tag}" |
-    jq -r '.content // empty' | base64 -d 2>/dev/null | awk '
-      /android14-6\.1/ {
-        if (match($0, /[0-9a-f]{40}/)) { print substr($0, RSTART, RLENGTH); exit }
-      }
-    ')
-fi
-[[ "$susfs_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "No SUSFS SHA for android14-6.1 in $wild_tag" >&2; exit 1; }
+# SUSFS: Fetch directly from upstream GitLab (simonpunk/susfs4ksu) instead of WildKernels
+# Uses gki-android14-6.1 branch HEAD for latest KernelSU compatibility (v2.3.0+)
+susfs_sha=$(curl --fail --silent --show-error \
+  "https://gitlab.com/api/v4/projects/simonpunk%2Fsusfs4ksu/repository/branches/gki-android14-6.1" | \
+  jq -r '.commit.id // empty')
+[[ "$susfs_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Cannot resolve SUSFS upstream branch gki-android14-6.1" >&2; exit 1; }
+echo "SUSFS upstream: simonpunk/susfs4ksu@gki-android14-6.1 (${susfs_sha:0:8})" >&2
 
 resukisu_sha=$(api "https://api.github.com/repos/${resukisu_repo}/commits/main" | jq -r '.sha // empty')
 [[ "$resukisu_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Cannot resolve ReSukiSU main' >&2; exit 1; }
