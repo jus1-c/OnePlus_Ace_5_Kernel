@@ -128,12 +128,12 @@ jobs:
               }
             ' source-snapshot/wild-audit.json > source-snapshot/wild-audit.tmp
             mv source-snapshot/wild-audit.tmp source-snapshot/wild-audit.json
+            # SUSFS now sourced from upstream GitLab, not WildKernels — skip SUSFS SHA comparison
             if ! jq -e '
               .candidate.commit == .source_snapshot.wild_sha and
-              .candidate.susfs_commit == .source_snapshot.susfs_sha and
               .candidate.kernel_patches_commit == .source_snapshot.kernel_patches_sha
             ' source-snapshot/wild-audit.json >/dev/null; then
-              jq --arg reason 'Resolved source snapshot differs from audited WildKernel snapshot' \
+              jq --arg reason 'Resolved source snapshot differs from audited WildKernel snapshot (wild_sha or kernel_patches mismatch)' \
                 '.status = "fail" | .reasons += [$reason]' source-snapshot/wild-audit.json > source-snapshot/wild-audit.tmp
               mv source-snapshot/wild-audit.tmp source-snapshot/wild-audit.json
             fi
