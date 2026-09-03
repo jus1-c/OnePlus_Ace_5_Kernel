@@ -42,7 +42,7 @@ susfs_sha=$(curl --fail --silent --show-error \
   "https://gitlab.com/api/v4/projects/simonpunk%2Fsusfs4ksu/repository/branches/gki-android14-6.1" | \
   jq -r '.commit.id // empty')
 [[ "$susfs_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Cannot resolve SUSFS upstream branch gki-android14-6.1" >&2; exit 1; }
-echo "SUSFS upstream: simonpunk/susfs4ksu@gki-android14-6.1 (${susfs_sha:0:8})"
+echo "SUSFS upstream: simonpunk/susfs4ksu@gki-android14-6.1 (${susfs_sha:0:8})" >&2
 
 resukisu_sha=$(api "https://api.github.com/repos/${resukisu_repo}/commits/main" | jq -r '.sha // empty')
 [[ "$resukisu_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Cannot resolve ReSukiSU main' >&2; exit 1; }
