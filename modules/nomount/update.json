@@ -1,6 +1,6 @@
 {
-  "version": "dev-13b09ceb591a-20260903190738",
-  "versionCode": 33794463882,
-  "zipUrl": "https://github.com/jus1-c/OnePlus_Ace_5_Kernel/releases/download/ace5-v2.2.0-r4-nm-dev-13b09ceb591a-r20/NoMount-v2.0.0-dev-13b09ceb591a.zip",
-  "changelog": "Build from nomount/dev@13b09ceb591a\nRun: https://github.com/jus1-c/OnePlus_Ace_5_Kernel/actions/runs/33794463882"
+  "version": "dev-b8d268353b4e-20260903195957",
+  "versionCode": 33799567554,
+  "zipUrl": "https://github.com/jus1-c/OnePlus_Ace_5_Kernel/releases/download/ace5-v2.2.0-r4-nm-dev-b8d268353b4e/NoMount-v2.0.0-dev-b8d268353b4e.zip",
+  "changelog": "Build from nomount/dev@b8d268353b4e\nRun: https://github.com/jus1-c/OnePlus_Ace_5_Kernel/actions/runs/33799567554"
 }
