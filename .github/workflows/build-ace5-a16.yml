@@ -412,10 +412,15 @@ jobs:
           nomount_branch=$(jq -r '.nomount_branch' <<< "$SOURCES")
           nomount_asset=$(basename "$(find release-assets -maxdepth 1 -type f -name 'NoMount-*.zip' | head -1)")
           zip_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${nomount_asset}"
+          # Extract exact version and versionCode from the built module.prop inside ZIP
+          MODULE_VERSION=$(unzip -p "release-assets/${nomount_asset}" module.prop | awk -F= '$1 == "version" { print $2; exit }')
+          MODULE_VERSION_CODE=$(unzip -p "release-assets/${nomount_asset}" module.prop | awk -F= '$1 == "versionCode" { print $2; exit }')
+          [[ -n "$MODULE_VERSION" ]] || { echo "Failed to extract version from module.prop" >&2; exit 1; }
+          [[ -n "$MODULE_VERSION_CODE" ]] || { echo "Failed to extract versionCode from module.prop" >&2; exit 1; }
           cat > release-assets/update.json <<EOF
           {
-            "version": "${NOMOUNT_VERSION}",
-            "versionCode": ${GITHUB_RUN_ID},
+            "version": "${MODULE_VERSION}",
+            "versionCode": ${MODULE_VERSION_CODE},
             "zipUrl": "${zip_url}",
             "changelog": "Build from nomount/${nomount_branch}@${nomount_short_sha}\nRun: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           }
