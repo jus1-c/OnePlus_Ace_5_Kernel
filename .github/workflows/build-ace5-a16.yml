@@ -277,6 +277,7 @@ jobs:
           RUN_SHA="${NOMOUNT_SHORT_SHA}-$(date -u +%Y%m%d%H%M%S)"
           sed -i "s/^version=.*/version=dev-${RUN_SHA}/" package/module.prop
           sed -i "s/^versionCode=.*/versionCode=${GITHUB_RUN_ID:-0}/" package/module.prop
+          echo "updateJson=https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/update.json" >> package/module.prop
           sha256sum package/bin/ko-loader-arm64 > package/bin/ko-loader-arm64.sha256
           sha256sum package/bin/nm-arm64 > package/bin/nm-arm64.sha256
           NOMOUNT_ZIP="NoMount-${NOMOUNT_BASE_VERSION}-${NOMOUNT_BRANCH}-${NOMOUNT_SHORT_SHA}.zip"
