@@ -1,6 +1,6 @@
 {
-  "version": "placeholder",
-  "versionCode": 0,
-  "zipUrl": "https://github.com/jus1-c/OnePlus_Ace_5_Kernel/releases/latest/download/NoMount-placeholder.zip",
-  "changelog": "Initial placeholder — will be updated by CI on each release."
+  "version": "dev-c4a02fdce298-20260903153538",
+  "versionCode": 33773406549,
+  "zipUrl": "https://github.com/jus1-c/OnePlus_Ace_5_Kernel/releases/download/ace5-v2.2.0-r4-nm-dev-c4a02fdce298/NoMount-v2.0.0-dev-c4a02fdce298.zip",
+  "changelog": "Build from nomount/dev@c4a02fdce298\nRun: https://github.com/jus1-c/OnePlus_Ace_5_Kernel/actions/runs/33773406549"
 }
