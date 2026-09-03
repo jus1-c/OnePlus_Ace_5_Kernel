@@ -279,13 +279,14 @@ jobs:
           NOMOUNT_SHORT_SHA="${NOMOUNT_SHA:0:12}"
           RUN_SHA="${NOMOUNT_SHORT_SHA}-$(date -u +%Y%m%d%H%M%S)"
           sed -i "s/^version=.*/version=dev-${RUN_SHA}/" package/module.prop
-          sed -i "s/^versionCode=.*/versionCode=${GITHUB_RUN_ID:-0}/" package/module.prop
+          sed -i "s/^versionCode=.*/versionCode=${GITHUB_RUN_NUMBER:-0}/" package/module.prop
           echo "updateJson=https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/modules/nomount/update.json" >> package/module.prop
           # Validate version/versionCode were set correctly
           FINAL_VERSION=$(awk -F= '$1 == "version" { print $2; exit }' package/module.prop)
           FINAL_VERSION_CODE=$(awk -F= '$1 == "versionCode" { print $2; exit }' package/module.prop)
           [[ "$FINAL_VERSION" == "dev-${RUN_SHA}" ]] || { echo "ERROR: version not set correctly in module.prop (expected dev-${RUN_SHA}, got ${FINAL_VERSION})" >&2; exit 1; }
-          [[ "$FINAL_VERSION_CODE" == "${GITHUB_RUN_ID}" ]] || { echo "ERROR: versionCode mismatch (expected ${GITHUB_RUN_ID}, got ${FINAL_VERSION_CODE})" >&2; exit 1; }
+          [[ "$FINAL_VERSION_CODE" == "${GITHUB_RUN_NUMBER}" ]] || { echo "ERROR: versionCode mismatch (expected ${GITHUB_RUN_NUMBER}, got ${FINAL_VERSION_CODE})" >&2; exit 1; }
+          [[ "${GITHUB_RUN_NUMBER}" -le 2147483647 ]] || { echo "ERROR: versionCode ${GITHUB_RUN_NUMBER} exceeds i32 max; module OTA will overflow" >&2; exit 1; }
           echo "Final module.prop version=${FINAL_VERSION} versionCode=${FINAL_VERSION_CODE}"
           sha256sum package/bin/ko-loader-arm64 > package/bin/ko-loader-arm64.sha256
           sha256sum package/bin/nm-arm64 > package/bin/nm-arm64.sha256
@@ -424,7 +425,7 @@ jobs:
           MODULE_VERSION=$(unzip -p "release-assets/${nomount_asset}" module.prop | awk -F= '$1 == "version" { print $2; exit }')
           MODULE_VERSION_CODE=$(unzip -p "release-assets/${nomount_asset}" module.prop | awk -F= '$1 == "versionCode" { print $2; exit }')
           [[ -n "$MODULE_VERSION" && -n "$MODULE_VERSION_CODE" ]] || { echo "ERROR: Failed to extract version/versionCode from ${nomount_asset}" >&2; exit 1; }
-          [[ "$MODULE_VERSION_CODE" == "${GITHUB_RUN_ID}" ]] || { echo "ERROR: versionCode mismatch in ZIP (expected ${GITHUB_RUN_ID}, got ${MODULE_VERSION_CODE})" >&2; exit 1; }
+          [[ "$MODULE_VERSION_CODE" == "${GITHUB_RUN_NUMBER}" ]] || { echo "ERROR: versionCode mismatch in ZIP (expected ${GITHUB_RUN_NUMBER}, got ${MODULE_VERSION_CODE})" >&2; exit 1; }
           # Verify updateJson field exists in module.prop
           unzip -p "release-assets/${nomount_asset}" module.prop | grep -q '^updateJson=' || { echo "ERROR: updateJson missing from module.prop" >&2; exit 1; }
           echo "Validated: version=${MODULE_VERSION} versionCode=${MODULE_VERSION_CODE} updateJson=present"
