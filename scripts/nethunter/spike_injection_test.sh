@@ -32,6 +32,8 @@ fi
 
 MODULE_HASH=$(sha256sum "$KO" | cut -d' ' -f1)
 
+mkdir -p "$(dirname "$RESULTS")"
+
 cat > "$RESULTS" <<EOF
 # Phase 0 Injection Spike Results
 
