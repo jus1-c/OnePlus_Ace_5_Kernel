@@ -279,7 +279,7 @@ jobs:
           RUN_SHA="${NOMOUNT_SHORT_SHA}-$(date -u +%Y%m%d%H%M%S)"
           sed -i "s/^version=.*/version=dev-${RUN_SHA}/" package/module.prop
           sed -i "s/^versionCode=.*/versionCode=${GITHUB_RUN_ID:-0}/" package/module.prop
-          echo "updateJson=https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/update.json" >> package/module.prop
+          echo "updateJson=https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/modules/nomount/update.json" >> package/module.prop
           # Validate version/versionCode were set correctly
           FINAL_VERSION=$(awk -F= '$1 == "version" { print $2; exit }' package/module.prop)
           FINAL_VERSION_CODE=$(awk -F= '$1 == "versionCode" { print $2; exit }' package/module.prop)
@@ -438,7 +438,7 @@ jobs:
           echo "Generated update.json:"
           cat release-assets/update.json
 
-      - name: Create prerelease
+      - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -447,3 +447,20 @@ jobs:
             RELEASE_ARGS+=(--prerelease)
           fi
           gh release create "${RELEASE_ARGS[@]}"
+
+      - name: Update modules/nomount/update.json on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp release-assets/update.json /tmp/nomount-update.json
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main --depth=1
+          git checkout -b update-nomount-json origin/main
+          mkdir -p modules/nomount
+          cp /tmp/nomount-update.json modules/nomount/update.json
+          git add modules/nomount/update.json
+          git diff --cached --quiet && { echo "update.json unchanged, skipping commit"; exit 0; }
+          git commit -m "chore: update nomount update.json for ${RELEASE_TAG}"
+          git push origin update-nomount-json:main
