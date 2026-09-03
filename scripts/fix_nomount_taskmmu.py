@@ -28,11 +28,13 @@ if count == 0:
     print('ERROR: block-scope extern not found in task_mmu.c', file=sys.stderr)
     sys.exit(1)
 
-marker = 'show_map_vma('
-idx = content.find(marker)
-if idx == -1:
-    print('ERROR: show_map_vma not found', file=sys.stderr)
+# Find the show_map_vma definition start — signature may span multiple lines
+# (GKI 6.1: "static void\nshow_map_vma(struct seq_file *m, ...)")
+m = re.search(r'\n(static\s+\w[\w\s\n]*?show_map_vma\s*\()', content)
+if m is None:
+    print('ERROR: show_map_vma definition not found', file=sys.stderr)
     sys.exit(1)
+idx = m.start(1)
 
 decl = ('#ifdef CONFIG_NOMOUNT\n'
         'extern void vfs_map_meta_override(const struct inode *, dev_t *, unsigned long *);\n'
