@@ -283,7 +283,7 @@ jobs:
           # Validate version/versionCode were set correctly
           FINAL_VERSION=$(awk -F= '$1 == "version" { print $2; exit }' package/module.prop)
           FINAL_VERSION_CODE=$(awk -F= '$1 == "versionCode" { print $2; exit }' package/module.prop)
-          [[ -n "$FINAL_VERSION" && "$FINAL_VERSION" != "dev-${RUN_SHA}" ]] || { echo "ERROR: version not set correctly in module.prop" >&2; exit 1; }
+          [[ "$FINAL_VERSION" == "dev-${RUN_SHA}" ]] || { echo "ERROR: version not set correctly in module.prop (expected dev-${RUN_SHA}, got ${FINAL_VERSION})" >&2; exit 1; }
           [[ "$FINAL_VERSION_CODE" == "${GITHUB_RUN_ID}" ]] || { echo "ERROR: versionCode mismatch (expected ${GITHUB_RUN_ID}, got ${FINAL_VERSION_CODE})" >&2; exit 1; }
           echo "Final module.prop version=${FINAL_VERSION} versionCode=${FINAL_VERSION_CODE}"
           sha256sum package/bin/ko-loader-arm64 > package/bin/ko-loader-arm64.sha256
