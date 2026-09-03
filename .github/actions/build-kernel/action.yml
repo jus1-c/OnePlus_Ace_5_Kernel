@@ -1093,6 +1093,14 @@ runs:
         cd common
         patch -p1 --forward < ../NoMount-Suite/hookless/patches/nomount_kernel_integration.patch
         cp ../NoMount-Suite/hookless/src/nomount.c ../NoMount-Suite/hookless/src/nomount.h fs/
+        # Post-patch: fix block-scope extern for ThinLTO+CFI compatibility.
+        # The integration patch adds `{ extern void vfs_map_meta_override(...); call; }`
+        # inside show_map_vma() — with CONFIG_LTO_CLANG_THIN + CONFIG_CFI_CLANG this
+        # generates GOT/PLT entries that ld.lld rejects. Replace with direct call +
+        # file-scope extern so the compiler emits a normal direct call.
+        python3 "$GITHUB_WORKSPACE/scripts/fix_nomount_taskmmu.py" fs/proc/task_mmu.c
+        grep -q '^extern void vfs_map_meta_override' fs/proc/task_mmu.c || { echo 'NoMount Suite: file-scope extern missing' >&2; exit 1; }
+        grep -q 'vfs_map_meta_override(inode, &dev, &ino);' fs/proc/task_mmu.c || { echo 'NoMount Suite: direct call missing' >&2; exit 1; }
         grep -q '^CONFIG_NOMOUNT=y' arch/arm64/configs/gki_defconfig || echo 'CONFIG_NOMOUNT=y' >> arch/arm64/configs/gki_defconfig
         grep -q 'config NOMOUNT' fs/Kconfig || { echo 'NoMount Suite Kconfig patch not landed' >&2; exit 1; }
         grep -q 'obj-$(CONFIG_NOMOUNT) += nomount.o' fs/Makefile || { echo 'NoMount Suite Makefile patch not landed' >&2; exit 1; }
