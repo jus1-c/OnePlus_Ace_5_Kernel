@@ -453,14 +453,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          cp release-assets/update.json /tmp/nomount-update.json
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main --depth=1
-          git checkout -b update-nomount-json origin/main
-          mkdir -p modules/nomount
-          cp /tmp/nomount-update.json modules/nomount/update.json
-          git add modules/nomount/update.json
-          git diff --cached --quiet && { echo "update.json unchanged, skipping commit"; exit 0; }
-          git commit -m "chore: update nomount update.json for ${RELEASE_TAG}"
-          git push origin update-nomount-json:main
+          FILE_PATH="modules/nomount/update.json"
+          NEW_B64=$(base64 -w0 release-assets/update.json)
+          EXISTING_SHA=$(gh api "repos/$GITHUB_REPOSITORY/contents/$FILE_PATH" --jq '.sha' 2>/dev/null || true)
+          if [[ -n "$EXISTING_SHA" ]]; then
+            EXISTING_CONTENT=$(gh api "repos/$GITHUB_REPOSITORY/contents/$FILE_PATH" --jq '.content' | base64 -d)
+            if [[ "$EXISTING_CONTENT" == "$(cat release-assets/update.json)" ]]; then
+              echo "update.json unchanged, skipping"
+              exit 0
+            fi
+            SHA_ARG=(-f "sha=$EXISTING_SHA")
+          else
+            SHA_ARG=()
+          fi
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$FILE_PATH" \
+            -f "message=chore: update nomount update.json for ${RELEASE_TAG}" \
+            -f "content=$NEW_B64" \
+            "${SHA_ARG[@]}"
+          echo "Committed update.json for ${RELEASE_TAG} via Contents API"
