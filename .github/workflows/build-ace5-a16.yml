@@ -244,60 +244,43 @@ jobs:
           fetch-depth: 1
 
       - name: Install build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils zip coreutils
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends curl ca-certificates zip coreutils jq
 
-      - name: Build NoMount module from resolved commit
+      - name: Package NoMount Suite module from release
         env:
+          NOMOUNT_TAG: ${{ fromJSON(needs.resolve.outputs.sources).nomount_tag }}
           NOMOUNT_SHA: ${{ fromJSON(needs.resolve.outputs.sources).nomount_sha }}
+          NOMOUNT_REPO: ${{ fromJSON(needs.resolve.outputs.sources).nomount_repo }}
         run: |
           set -euo pipefail
-          curl --fail --location --silent --show-error \
-            https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz -o zig.tar.xz
-          echo '473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982  zig.tar.xz' | sha256sum -c -
-          tar -xf zig.tar.xz
-          export PATH="$PWD/zig-linux-x86_64-0.14.0:$PATH"
-          git clone --no-checkout https://github.com/maxsteeel/nomount.git nomount
-          git -C nomount fetch --depth=1 origin "$NOMOUNT_SHA"
-          git -C nomount checkout --detach FETCH_HEAD
-          test "$(git -C nomount rev-parse HEAD)" = "$NOMOUNT_SHA"
-          mkdir -p package/bin
-          zig cc -target aarch64-linux -Oz -mcmodel=tiny -static -nostdlib -ffreestanding \
-            -fno-unwind-tables -fno-ident -Wno-invalid-noreturn -Wl,--entry=_start \
-            nomount/userspace/src/nm.c -o package/bin/nm-arm64
-          git clone --no-checkout "https://github.com/${{ fromJSON(needs.resolve.outputs.sources).loader_repo }}.git" ko-loader
-          git -C ko-loader fetch --depth=1 origin "${{ fromJSON(needs.resolve.outputs.sources).loader_sha }}"
-          git -C ko-loader checkout --detach FETCH_HEAD
-          test "$(git -C ko-loader rev-parse HEAD)" = "${{ fromJSON(needs.resolve.outputs.sources).loader_sha }}"
-          make -C ko-loader TARGET=aarch64-linux
-          cp ko-loader/ko-loader package/bin/ko-loader-arm64
-          # Extract base version directly from checked-out source BEFORE any modifications
-          NOMOUNT_BASE_VERSION=$(awk -F= '$1 == "version" { print $2; exit }' nomount/module/module.prop | tr -cd '[:alnum:]._-')
-          NOMOUNT_BASE_VERSION="${NOMOUNT_BASE_VERSION:-dev}"
-          echo "Upstream NoMount version: ${NOMOUNT_BASE_VERSION} (from commit ${NOMOUNT_SHA:0:12})"
-          cp -a nomount/module/. package/
-          NOMOUNT_BRANCH="${{ fromJSON(needs.resolve.outputs.sources).nomount_branch }}"
-          NOMOUNT_SHORT_SHA="${NOMOUNT_SHA:0:12}"
-          RUN_SHA="${NOMOUNT_SHORT_SHA}-$(date -u +%Y%m%d%H%M%S)"
-          sed -i "s/^version=.*/version=dev-${RUN_SHA}/" package/module.prop
+          # Resolve the prebuilt module asset for the pinned Suite tag
+          REL=$(curl --fail --silent --show-error --location "https://api.github.com/repos/${NOMOUNT_REPO}/releases/tags/${NOMOUNT_TAG}")
+          ASSET_NAME=$(jq -r '[.assets[] | select(.name | startswith("00_NoMount-Module-")) | .name][0] // empty' <<< "$REL")
+          [[ -n "$ASSET_NAME" ]] || { echo "No NoMount Suite module asset in ${NOMOUNT_TAG}" >&2; exit 1; }
+          curl --fail --location --silent --show-error -o suite.zip "https://github.com/${NOMOUNT_REPO}/releases/download/${NOMOUNT_TAG}/${ASSET_NAME}"
+          rm -rf package && mkdir -p package
+          unzip -q -o suite.zip -d package
+          # Keep upstream semver version; override versionCode for monotonic OTA and inject our update channel
+          UPSTREAM_VERSION=$(awk -F= '$1 == "version" { print $2; exit }' package/module.prop)
+          echo "Upstream NoMount Suite version: ${UPSTREAM_VERSION} (tag ${NOMOUNT_TAG}, commit ${NOMOUNT_SHA:0:12})"
           sed -i "s/^versionCode=.*/versionCode=${GITHUB_RUN_NUMBER:-0}/" package/module.prop
-          echo "updateJson=https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/modules/nomount/update.json" >> package/module.prop
-          # Validate version/versionCode were set correctly
-          FINAL_VERSION=$(awk -F= '$1 == "version" { print $2; exit }' package/module.prop)
+          sed -i '/^updateJson=/d' package/module.prop
+          echo "updateJson=https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/modules/nomount-suite/update.json" >> package/module.prop
           FINAL_VERSION_CODE=$(awk -F= '$1 == "versionCode" { print $2; exit }' package/module.prop)
-          [[ "$FINAL_VERSION" == "dev-${RUN_SHA}" ]] || { echo "ERROR: version not set correctly in module.prop (expected dev-${RUN_SHA}, got ${FINAL_VERSION})" >&2; exit 1; }
           [[ "$FINAL_VERSION_CODE" == "${GITHUB_RUN_NUMBER}" ]] || { echo "ERROR: versionCode mismatch (expected ${GITHUB_RUN_NUMBER}, got ${FINAL_VERSION_CODE})" >&2; exit 1; }
           [[ "${GITHUB_RUN_NUMBER}" -le 2147483647 ]] || { echo "ERROR: versionCode ${GITHUB_RUN_NUMBER} exceeds i32 max; module OTA will overflow" >&2; exit 1; }
-          echo "Final module.prop version=${FINAL_VERSION} versionCode=${FINAL_VERSION_CODE}"
-          sha256sum package/bin/ko-loader-arm64 > package/bin/ko-loader-arm64.sha256
-          sha256sum package/bin/nm-arm64 > package/bin/nm-arm64.sha256
-          NOMOUNT_ZIP="NoMount-${NOMOUNT_BASE_VERSION}-${NOMOUNT_BRANCH}-${NOMOUNT_SHORT_SHA}.zip"
-          (cd package && zip -r9 "../${NOMOUNT_ZIP}" .)
+          grep -q '^updateJson=' package/module.prop || { echo "ERROR: updateJson missing from module.prop" >&2; exit 1; }
+          # Regenerate integrity manifest — the installer verifies every file against it
+          (cd package && find . -type f ! -name 'nomount.sha256sums' -print0 | xargs -0 sha256sum > nomount.sha256sums)
+          NOMOUNT_ZIP="NoMount-Suite-${NOMOUNT_TAG}-${NOMOUNT_SHA:0:12}.zip"
+          (cd package && zip -q -r9 "../${NOMOUNT_ZIP}" .)
+          echo "Built ${NOMOUNT_ZIP}"
 
-      - name: Upload NoMount module
+      - name: Upload NoMount Suite module
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: nomount-module
-          path: NoMount-*.zip
+          name: nomount-suite-module
+          path: NoMount-Suite-*.zip
           archive: false
           compression-level: 0
           if-no-files-found: error
@@ -327,29 +310,28 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           mapfile -t kernel_zips < <(find release-assets -maxdepth 1 -type f -name 'AK3_*.zip' | sort)
-          mapfile -t nomount_zips < <(find release-assets -maxdepth 1 -type f -name 'NoMount-*.zip' | sort)
+          mapfile -t nomount_zips < <(find release-assets -maxdepth 1 -type f -name 'NoMount-Suite-*.zip' | sort)
           [[ "${#kernel_zips[@]}" -eq 2 ]] || { echo 'Expected exactly two kernel ZIPs' >&2; find release-assets -maxdepth 1 -type f || true; exit 1; }
-          [[ "${#nomount_zips[@]}" -eq 1 ]] || { echo 'Expected exactly one NoMount ZIP' >&2; find release-assets -maxdepth 1 -type f || true; exit 1; }
+          [[ "${#nomount_zips[@]}" -eq 1 ]] || { echo 'Expected exactly one NoMount Suite ZIP' >&2; find release-assets -maxdepth 1 -type f || true; exit 1; }
 
           wild_release=$(jq -r '.wild_release' <<< "$SOURCES")
           wild_sha=$(jq -r '.wild_sha' <<< "$SOURCES")
-          nomount_branch=$(jq -r '.nomount_branch' <<< "$SOURCES")
+          nomount_tag=$(jq -r '.nomount_tag' <<< "$SOURCES")
           nomount_sha=$(jq -r '.nomount_sha' <<< "$SOURCES")
           nomount_short_sha="${nomount_sha:0:12}"
           nomount_asset=$(basename "${nomount_zips[0]}")
-          nomount_suffix="-${nomount_branch}-${nomount_short_sha}.zip"
-          [[ "$nomount_asset" == NoMount-*"$nomount_suffix" ]] || {
-            echo "NoMount asset has unexpected name: $nomount_asset" >&2
+          nomount_expected="NoMount-Suite-${nomount_tag}-${nomount_short_sha}.zip"
+          [[ "$nomount_asset" == "$nomount_expected" ]] || {
+            echo "NoMount Suite asset has unexpected name: $nomount_asset (expected $nomount_expected)" >&2
             exit 1
           }
-          nomount_version="${nomount_asset#NoMount-}"
-          nomount_version="${nomount_version%$nomount_suffix}"
+          nomount_version="$nomount_tag"
 
           find release-assets -maxdepth 1 -type f ! -name 'AK3_*.zip' ! -name "$nomount_asset" -delete
           jq . <<< "$SOURCES" > release-assets/resolved-sources.json
           sha256sum release-assets/*.zip | sort -k2 > release-assets/00_CHECKSUMS.txt
 
-          release_tag="ace5-${wild_release}-nm-${nomount_branch}-${nomount_short_sha}"
+          release_tag="ace5-${wild_release}-nms-${nomount_tag}-${nomount_short_sha}"
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             release_tag="${release_tag}-r${GITHUB_RUN_NUMBER}"
           fi
@@ -358,16 +340,16 @@ jobs:
           echo "NOMOUNT_VERSION=$nomount_version" >> "$GITHUB_ENV"
 
           {
-            echo "# OnePlus Ace 5 Kernel 📦 NoMount (${nomount_version})"
+            echo "# OnePlus Ace 5 Kernel 📦 NoMount Suite (${nomount_version})"
             echo
-            echo "**A custom OnePlus Ace 5 kernel plus a mountless NoMount add-on.**"
+            echo "**A custom OnePlus Ace 5 kernel plus a mountless NoMount Suite add-on (Prism engine).**"
             echo
             echo "## This release contains two downloads"
             echo
             echo '1. **Kernel** — flash the matching `AK3_...zip` with Kernel Flasher or KernelSU Manager.'
-            printf '2. **NoMount module** — install `%s` from KernelSU Manager Modules after rebooting into the kernel.\n' "$nomount_asset"
+            printf '2. **NoMount Suite module** — install `%s` from KernelSU Manager Modules after rebooting into the kernel.\n' "$nomount_asset"
             echo
-            echo "> NoMount is compiled into kernel but remains dormant until module activates it. Install both."
+            echo "> NoMount Suite is compiled into kernel but remains dormant until the module activates it. Install both."
             echo
             echo "## Kernel downloads"
             echo
@@ -387,8 +369,8 @@ jobs:
             echo "|---|---|"
             printf '| WildKernel release | `%s` |\n' "$wild_release"
             printf '| WildKernel commit | `%s` |\n' "$wild_sha"
-            printf '| NoMount branch | `%s` |\n' "$nomount_branch"
-            printf '| NoMount commit | `%s` |\n' "$nomount_sha"
+            printf '| NoMount Suite tag | `%s` |\n' "$nomount_tag"
+            printf '| NoMount Suite commit | `%s` |\n' "$nomount_sha"
             echo "| Root | ReSukiSU |"
             printf '| Optimization | `%s` |\n' '${{ inputs.optimize_level }}'
             printf '| Clean build | `%s` |\n' '${{ inputs.clean_build }}'
@@ -398,12 +380,12 @@ jobs:
             echo "1. Select ZIP matching exact device and kernel version."
             echo "2. Keep stock boot image for rollback."
             echo "3. Flash kernel ZIP with Kernel Flasher."
-            echo "4. Boot and install NoMount module from KernelSU Manager."
+            echo "4. Boot and install the NoMount Suite module from KernelSU Manager."
             echo "5. Reboot again."
             echo
             echo "## Features"
             echo
-            echo "ReSukiSU, SUSFS, NoMount, BBG, BBRv1/v3, CAKE/PIE/FQ_PIE, WireGuard, IP Set, IPv6 NAT, TTL/HL, ThinLTO, Unicode fix, Droidspaces, NTSync, and TMPFS ACL/XATTR."
+            echo "ReSukiSU, SUSFS, NoMount Suite (Prism engine), BBG, BBRv1/v3, CAKE/PIE/FQ_PIE, WireGuard, IP Set, IPv6 NAT, TTL/HL, ThinLTO, Unicode fix, Droidspaces, NTSync, and TMPFS ACL/XATTR."
             echo
             echo "## Sources"
             echo
@@ -412,29 +394,29 @@ jobs:
             echo "Build run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } > release-assets/00_DOWNLOADS.md
 
-      - name: Generate update.json for NoMount module
+      - name: Generate update.json for NoMount Suite module
         env:
           SOURCES: ${{ needs.resolve.outputs.sources }}
         run: |
           set -euo pipefail
-          nomount_sha=$(jq -r '.nomount_sha' <<< "$SOURCES")
-          nomount_short_sha="${nomount_sha:0:12}"
-          nomount_branch=$(jq -r '.nomount_branch' <<< "$SOURCES")
-          nomount_asset=$(basename "$(find release-assets -maxdepth 1 -type f -name 'NoMount-*.zip' | head -1)")
+          nomount_tag=$(jq -r '.nomount_tag' <<< "$SOURCES")
+          nomount_short_sha=$(jq -r '.nomount_sha' <<< "$SOURCES")
+          nomount_short_sha="${nomount_short_sha:0:12}"
+          nomount_asset=$(basename "$(find release-assets -maxdepth 1 -type f -name 'NoMount-Suite-*.zip' | head -1)")
           zip_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${nomount_asset}"
           MODULE_VERSION=$(unzip -p "release-assets/${nomount_asset}" module.prop | awk -F= '$1 == "version" { print $2; exit }')
           MODULE_VERSION_CODE=$(unzip -p "release-assets/${nomount_asset}" module.prop | awk -F= '$1 == "versionCode" { print $2; exit }')
           [[ -n "$MODULE_VERSION" && -n "$MODULE_VERSION_CODE" ]] || { echo "ERROR: Failed to extract version/versionCode from ${nomount_asset}" >&2; exit 1; }
           [[ "$MODULE_VERSION_CODE" == "${GITHUB_RUN_NUMBER}" ]] || { echo "ERROR: versionCode mismatch in ZIP (expected ${GITHUB_RUN_NUMBER}, got ${MODULE_VERSION_CODE})" >&2; exit 1; }
-          # Verify updateJson field exists in module.prop
-          unzip -p "release-assets/${nomount_asset}" module.prop | grep -q '^updateJson=' || { echo "ERROR: updateJson missing from module.prop" >&2; exit 1; }
+          # Verify updateJson field points to our nomount-suite channel
+          unzip -p "release-assets/${nomount_asset}" module.prop | grep -q '^updateJson=.*modules/nomount-suite/update.json' || { echo "ERROR: updateJson missing or wrong path in module.prop" >&2; exit 1; }
           echo "Validated: version=${MODULE_VERSION} versionCode=${MODULE_VERSION_CODE} updateJson=present"
           cat > release-assets/update.json <<EOF
           {
             "version": "${MODULE_VERSION}",
             "versionCode": ${MODULE_VERSION_CODE},
             "zipUrl": "${zip_url}",
-            "changelog": "Build from nomount/${nomount_branch}@${nomount_short_sha}\nRun: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            "changelog": "Build from NoMount-Suite/${nomount_tag}@${nomount_short_sha}\nRun: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           }
           EOF
           echo "Generated update.json:"
@@ -444,18 +426,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RELEASE_ARGS=("$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --title "OnePlus Ace 5 Kernel 📦 NoMount (${NOMOUNT_VERSION})" --notes-file release-assets/00_DOWNLOADS.md)
+          RELEASE_ARGS=("$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --title "OnePlus Ace 5 Kernel 📦 NoMount Suite (${NOMOUNT_VERSION})" --notes-file release-assets/00_DOWNLOADS.md)
           if [[ "${{ inputs.prerelease }}" == "true" ]]; then
             RELEASE_ARGS+=(--prerelease)
           fi
           gh release create "${RELEASE_ARGS[@]}"
 
-      - name: Update modules/nomount/update.json on main
+      - name: Update modules/nomount-suite/update.json on main
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          FILE_PATH="modules/nomount/update.json"
+          FILE_PATH="modules/nomount-suite/update.json"
           NEW_B64=$(base64 -w0 release-assets/update.json)
           EXISTING_SHA=$(gh api "repos/$GITHUB_REPOSITORY/contents/$FILE_PATH" --jq '.sha' 2>/dev/null || true)
           if [[ -n "$EXISTING_SHA" ]]; then
@@ -469,7 +451,7 @@ jobs:
             SHA_ARG=()
           fi
           gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$FILE_PATH" \
-            -f "message=chore: update nomount update.json for ${RELEASE_TAG}" \
+            -f "message=chore: update nomount-suite update.json for ${RELEASE_TAG}" \
             -f "content=$NEW_B64" \
             "${SHA_ARG[@]}"
           echo "Committed update.json for ${RELEASE_TAG} via Contents API"

@@ -47,10 +47,11 @@ for expected in "${required[@]}"; do
   [[ "$actual" == "$expected" ]] || { echo "Missing config: $expected" >&2; exit 1; }
 done
 
-[[ -f "$source_tree/fs/nomount/Kconfig" ]] || { echo 'NoMount Kconfig missing' >&2; exit 1; }
-[[ -f "$source_tree/fs/nomount/Makefile" ]] || { echo 'NoMount Makefile missing' >&2; exit 1; }
-grep -q 'source "fs/nomount/Kconfig"' "$source_tree/fs/Kconfig" || { echo 'NoMount Kconfig not wired' >&2; exit 1; }
-grep -q 'obj-$(CONFIG_NOMOUNT) += nomount/' "$source_tree/fs/Makefile" || { echo 'NoMount Makefile not wired' >&2; exit 1; }
+[[ -f "$source_tree/fs/nomount.c" ]] || { echo 'NoMount Suite fs/nomount.c missing' >&2; exit 1; }
+[[ -f "$source_tree/fs/nomount.h" ]] || { echo 'NoMount Suite fs/nomount.h missing' >&2; exit 1; }
+grep -q 'config NOMOUNT' "$source_tree/fs/Kconfig" || { echo 'NoMount Suite Kconfig not wired' >&2; exit 1; }
+grep -q 'obj-$(CONFIG_NOMOUNT) += nomount.o' "$source_tree/fs/Makefile" || { echo 'NoMount Suite Makefile not wired' >&2; exit 1; }
+grep -q 'vfs_map_meta_override' "$source_tree/fs/proc/task_mmu.c" || { echo 'NoMount Suite task_mmu.c hook missing' >&2; exit 1; }
 grep -q 'susfs_is_avc_log_spoofing_enabled' "$source_tree/security/selinux/avc.c" || { echo 'SUSFS AVC integration missing' >&2; exit 1; }
 grep -q 'Check if the decomposition result is empty' "$source_tree/fs/unicode/utf8-norm.c" || { echo 'Unicode bypass patch missing' >&2; exit 1; }
 

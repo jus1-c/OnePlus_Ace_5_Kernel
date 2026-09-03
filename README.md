@@ -8,7 +8,7 @@ Ace 5 A16 target published by the latest stable WildKernel release, currently
 
 - ReSukiSU from current `main`, resolved to a full commit before each run.
 - SUSFS from the matching `android14-6.1` commit recorded in that WildKernel release.
-- NoMount built into the kernel from the newest `dev` commit whose completed check runs all pass.
+- NoMount Suite (Prism engine) built into the kernel, pinned to the newest Suite release tag.
 - WildKernel BBG, BBRv1/BBRv3, CAKE/PIE, WireGuard, IP Set, IPv6 NAT, TTL,
   ThinLTO, TMPFS XATTR/ACL, Unicode fix, Droidspaces, and NTSync features.
 
@@ -17,12 +17,12 @@ Ace 5 A16 target published by the latest stable WildKernel release, currently
 Use **Actions > Build OnePlus Ace 5 A16 > Run workflow**.
 
 - `publish_release=false` only uploads run artifacts.
-- `publish_release=true` creates a prerelease after both kernel targets and the
-  NoMount module package complete successfully.
+- `publish_release=true` creates a release after both kernel targets and the
+  NoMount Suite module package complete successfully.
 - No workflow runs on push, pull request, schedule, tag, or upstream update.
 
 Each run writes `resolved-sources.json` containing every full source commit,
-the selected WildKernel release, the NoMount green CI run, and target matrix.
+the selected WildKernel release, the NoMount Suite tag, and target matrix.
 
 ## WildKernel Updates
 
@@ -46,13 +46,13 @@ To adopt a new stable release:
 4. Update `config/wild-reviewed.json` with reviewed full SHAs and schema.
 5. Run `GH_TOKEN="$(gh auth token)" bash tests/test_audit_wild_release.sh`.
 6. Run both Ace 5 targets with `publish_release=false`; merge only when both
-   kernels and the NoMount package pass.
+   kernels and the NoMount Suite package pass.
 
 ## Artifacts
 
 Each target has a flashable AnyKernel3 ZIP, raw `Image`, final `.config`,
-summary, and SHA256 values. The NoMount ZIP is built from the exact same
-NoMount commit as the built-in driver.
+summary, and SHA256 values. The NoMount Suite module ZIP is repackaged from
+the Suite release pinned to the same tag as the built-in kernel engine.
 
 ## Flashing
 

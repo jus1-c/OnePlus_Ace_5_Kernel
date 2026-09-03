@@ -1079,41 +1079,27 @@ runs:
         
         echo "::endgroup::"
 
-    - name: Add NoMount
+    - name: Add NoMount Suite (Prism engine)
       shell: bash
       run: |
         set -euo pipefail
-        echo "::group::Add NoMount"
+        echo "::group::Add NoMount Suite (Prism engine)"
         cd "$KERNEL_PLATFORM_FOLDER"
-        git clone --no-checkout https://github.com/maxsteeel/nomount.git NoMount
-        git -C NoMount fetch --depth=1 origin "${{ inputs.nomount_commit }}"
-        git -C NoMount checkout --detach FETCH_HEAD
-        test "$(git -C NoMount rev-parse HEAD)" = "${{ inputs.nomount_commit }}"
-        mkdir -p common/fs/nomount
-        cp NoMount/kernel/src/Kconfig NoMount/kernel/src/Makefile NoMount/kernel/src/nomount.c NoMount/kernel/src/nomount.h common/fs/nomount/
-        insert_before_last_endmenu() {
-          local file="$1" line="$2"
-          grep -Fqx "$line" "$file" && return 0
-          awk -v line="$line" '
-            { lines[NR] = $0 }
-            END {
-              last = 0
-              for (i = 1; i <= NR; i++)
-                if (lines[i] ~ /^endmenu[[:space:]]*$/) last = i
-              if (!last) print line
-              for (i = 1; i <= NR; i++) {
-                if (i == last) print line
-                print lines[i]
-              }
-            }
-          ' "$file" > "$file.tmp"
-          mv "$file.tmp" "$file"
-        }
-        insert_before_last_endmenu common/fs/Kconfig 'source "fs/nomount/Kconfig"'
-        grep -q 'obj-$(CONFIG_NOMOUNT) += nomount/' common/fs/Makefile || printf '\nobj-$(CONFIG_NOMOUNT) += nomount/\n' >> common/fs/Makefile
-        echo 'CONFIG_NOMOUNT=y' >> common/arch/arm64/configs/gki_defconfig
-        echo "NOMOUNT_COMMIT_SHA=${{ inputs.nomount_commit }}" >> "$GITHUB_ENV"
-        echo "✅ NoMount added (commit: ${{ inputs.nomount_commit }})"
+        rm -rf common/fs/nomount common/fs/nomount.c common/fs/nomount.h
+        git clone --no-checkout https://github.com/Bouteillepleine/NoMount-Suite.git NoMount-Suite
+        git -C NoMount-Suite fetch --depth=1 origin "${{ inputs.nomount_commit }}"
+        git -C NoMount-Suite checkout --detach FETCH_HEAD
+        test "$(git -C NoMount-Suite rev-parse HEAD)" = "${{ inputs.nomount_commit }}"
+        cd common
+        patch -p1 --forward < ../NoMount-Suite/hookless/patches/nomount_kernel_integration.patch
+        cp ../NoMount-Suite/hookless/src/nomount.c ../NoMount-Suite/hookless/src/nomount.h fs/
+        grep -q '^CONFIG_NOMOUNT=y' arch/arm64/configs/gki_defconfig || echo 'CONFIG_NOMOUNT=y' >> arch/arm64/configs/gki_defconfig
+        grep -q 'config NOMOUNT' fs/Kconfig || { echo 'NoMount Suite Kconfig patch not landed' >&2; exit 1; }
+        grep -q 'obj-$(CONFIG_NOMOUNT) += nomount.o' fs/Makefile || { echo 'NoMount Suite Makefile patch not landed' >&2; exit 1; }
+        grep -q 'vfs_map_meta_override' fs/proc/task_mmu.c || { echo 'NoMount Suite task_mmu.c patch not landed' >&2; exit 1; }
+        test -f fs/nomount.c && test -f fs/nomount.h || { echo 'NoMount Suite fs/nomount.c/h missing' >&2; exit 1; }
+        echo "NOMOUNT_SUITE_COMMIT=${{ inputs.nomount_commit }}" >> "$GITHUB_ENV"
+        echo "✅ NoMount Suite added (commit: ${{ inputs.nomount_commit }})"
         echo "::endgroup::"
 
     - name: Add BBG

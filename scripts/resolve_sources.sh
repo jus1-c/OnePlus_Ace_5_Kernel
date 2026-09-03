@@ -3,8 +3,8 @@ set -euo pipefail
 
 repo="${WILD_REPO:-WildKernels/OnePlus_KernelSU_SUSFS}"
 resukisu_repo="${RESUKISU_REPO:-ReSukiSU/ReSukiSU}"
-nomount_repo="${NOMOUNT_REPO:-maxsteeel/nomount}"
-nomount_branch="${NOMOUNT_BRANCH:-dev}"
+nomount_repo="${NOMOUNT_REPO:-Bouteillepleine/NoMount-Suite}"
+nomount_branch="${NOMOUNT_BRANCH:-main}"
 nomount_tag="${NOMOUNT_TAG:-}"
 kernel_patches_repo="${KERNEL_PATCHES_REPO:-WildKernels/kernel_patches}"
 wild_release_json=$(mktemp)
@@ -48,36 +48,16 @@ echo "SUSFS upstream: simonpunk/susfs4ksu@gki-android14-6.1 (${susfs_sha:0:8})" 
 resukisu_sha=$(api "https://api.github.com/repos/${resukisu_repo}/commits/main" | jq -r '.sha // empty')
 [[ "$resukisu_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Cannot resolve ReSukiSU main' >&2; exit 1; }
 
+# NoMount Suite: pinned to a release tag (engine + userspace must flash as a pair).
 nomount_sha=''
 nomount_run_url=''
-if [[ -n "$nomount_tag" ]]; then
-  if [[ "$nomount_tag" == latest ]]; then
-    nomount_tag=$(api "https://api.github.com/repos/${nomount_repo}/releases/latest" | jq -r '.tag_name // empty')
-    [[ -n "$nomount_tag" ]] || { echo "No NoMount release found" >&2; exit 1; }
-  fi
-  nomount_sha=$(api "https://api.github.com/repos/${nomount_repo}/commits/${nomount_tag}" | jq -r '.sha // empty')
-  [[ "$nomount_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Cannot resolve NoMount tag ${nomount_tag}" >&2; exit 1; }
-  echo "NoMount pinned to release ${nomount_tag} (${nomount_sha:0:8})" >&2
-else
-  for page in 1 2 3 4 5; do
-    runs=$(api "https://api.github.com/repos/${nomount_repo}/actions/runs?branch=${nomount_branch}&per_page=100&page=${page}")
-    while IFS=$'\t' read -r sha status conclusion url; do
-      [[ "$status" == completed && "$conclusion" == success ]] || continue
-      [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
-      check_runs=$(api "https://api.github.com/repos/${nomount_repo}/commits/${sha}/check-runs?per_page=100")
-      total=$(jq -r '.total_count // 0' <<< "$check_runs")
-      passed=$(jq '[.check_runs[] | select(.status == "completed" and .conclusion == "success")] | length' <<< "$check_runs")
-      [[ "$total" -gt 0 && "$passed" -eq "$total" ]] || continue
-      status_json=$(api "https://api.github.com/repos/${nomount_repo}/commits/${sha}/status")
-      status_count=$(jq -r '.total_count // 0' <<< "$status_json")
-      [[ "$status_count" == 0 || "$(jq -r '.state' <<< "$status_json")" == success ]] || continue
-      nomount_sha="$sha"
-      nomount_run_url="$url"
-      break 2
-    done < <(jq -r '.workflow_runs[] | [.head_sha,.status,.conclusion,.html_url] | @tsv' <<< "$runs")
-  done
-  [[ "$nomount_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "No green NoMount ${nomount_branch} commit found" >&2; exit 1; }
+if [[ "$nomount_tag" == latest ]]; then
+  nomount_tag=$(api "https://api.github.com/repos/${nomount_repo}/releases/latest" | jq -r '.tag_name // empty')
 fi
+[[ -n "$nomount_tag" ]] || { echo "No NoMount Suite tag configured (set NOMOUNT_TAG)" >&2; exit 1; }
+nomount_sha=$(api "https://api.github.com/repos/${nomount_repo}/commits/${nomount_tag}" | jq -r '.sha // empty')
+[[ "$nomount_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Cannot resolve NoMount Suite tag ${nomount_tag}" >&2; exit 1; }
+echo "NoMount Suite pinned to release ${nomount_tag} (${nomount_sha:0:8})" >&2
 
 kernel_patches_sha=$(api "https://api.github.com/repos/${kernel_patches_repo}/commits?sha=main&until=${wild_published_at}&per_page=1" | jq -r '.[0].sha // empty')
 [[ "$kernel_patches_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Cannot resolve kernel_patches main' >&2; exit 1; }
@@ -85,10 +65,6 @@ kernel_patches_sha=$(api "https://api.github.com/repos/${kernel_patches_repo}/co
 bbg_repo='vc-teahouse/Baseband-guard'
 bbg_sha=$(api "https://api.github.com/repos/${bbg_repo}/commits/main" | jq -r '.sha // empty')
 [[ "$bbg_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Cannot resolve Baseband Guard main' >&2; exit 1; }
-
-loader_repo='maxsteeel/ko-loader'
-loader_sha=$(api "https://api.github.com/repos/${loader_repo}/commits/main" | jq -r '.sha // empty')
-[[ "$loader_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Cannot resolve ko-loader main' >&2; exit 1; }
 
 configs=$(api "https://api.github.com/repos/${repo}/git/trees/${wild_sha}?recursive=1" |
   jq -c '[.tree[] | select(.path | test("^configs/a16/OP-ACE-5(-[0-9]+\\.[0-9]+\\.[0-9]+)?\\.json$")) | .path]')
@@ -115,8 +91,6 @@ manifests=$(api "https://api.github.com/repos/${repo}/git/trees/${wild_sha}?recu
   --arg kernel_patches_sha "$kernel_patches_sha" \
   --arg bbg_repo "$bbg_repo" \
   --arg bbg_sha "$bbg_sha" \
-  --arg loader_repo "$loader_repo" \
-  --arg loader_sha "$loader_sha" \
   --argjson configs "$configs" \
   --argjson manifests "$manifests" \
   '{wild_repo:$wild_repo,wild_release:$wild_tag,wild_sha:$wild_sha,wild_published_at:$wild_published_at,susfs_sha:$susfs_sha,
@@ -124,5 +98,4 @@ manifests=$(api "https://api.github.com/repos/${repo}/git/trees/${wild_sha}?recu
      nomount_repo:$nomount_repo,nomount_branch:$nomount_branch,nomount_tag:$nomount_tag,nomount_sha:$nomount_sha,nomount_run_url:$nomount_run_url,
     kernel_patches_repo:$kernel_patches_repo,kernel_patches_sha:$kernel_patches_sha,
     bbg_repo:$bbg_repo,bbg_sha:$bbg_sha,
-    loader_repo:$loader_repo,loader_sha:$loader_sha,
     configs:$configs,manifests:$manifests}'
