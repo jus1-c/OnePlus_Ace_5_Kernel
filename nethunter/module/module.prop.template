@@ -1,0 +1,11 @@
+id=nethunter_takeover_@@TARGET@@
+name=NetHunter Takeover @@TARGET@@
+version=@@VERSION@@
+versionCode=@@VERSION_CODE@@
+author=WildKernel
+description=Reversible hardware takeover for @@TARGET@@. Wi-Fi injection, BT VHCI, NFC raw NCI.
+target=@@TARGET@@
+kernel_vermagic=@@VERMAGIC@@
+scmversion=@@SCMVERSION@@
+sha256_qca=@@SHA_QCA@@
+sha256_btvhci=@@SHA_BTVHCI@@
