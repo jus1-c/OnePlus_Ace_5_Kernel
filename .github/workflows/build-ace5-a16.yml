@@ -61,6 +61,7 @@ jobs:
         id: sources
         env:
           GH_TOKEN: ${{ github.token }}
+          NOMOUNT_TAG: latest
         shell: bash
         run: |
           set -euo pipefail
