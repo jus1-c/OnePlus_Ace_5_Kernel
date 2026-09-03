@@ -358,7 +358,7 @@ runs:
         echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
         echo "CCACHE_LOGFILE=$GITHUB_WORKSPACE/ccache.log" >> "$GITHUB_ENV"
         echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
-        echo "CCACHE_MAXSIZE=12G" >> "$GITHUB_ENV"
+        echo "CCACHE_MAXSIZE=5G" >> "$GITHUB_ENV"
         
         DEBUG_ZIP_NAME="debug_${OP_MODEL}_${OP_OS_VERSION}.zip"
         echo "DEBUG_ZIP_NAME=$DEBUG_ZIP_NAME" >> "$GITHUB_ENV"
@@ -662,6 +662,16 @@ runs:
         export RUSTTARGET="aarch64-linux-android"
         make V=1 rustavailable
         echo "::endgroup::"
+
+    - name: Restore ccache
+      if: ${{ inputs.clean == false || inputs.clean == 'false' }}
+      id: ccache_restore
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: ${{ env.CCACHE_DIR }}
+        key: ccache-${{ env.OP_MODEL }}-${{ inputs.optimize_level }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ccache-${{ env.OP_MODEL }}-${{ inputs.optimize_level }}-
 
     - name: Check and Prepare Caches
       shell: bash
@@ -1988,6 +1998,13 @@ runs:
         echo '```' >> $GITHUB_STEP_SUMMARY
         ccache -s --verbose >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
+
+    - name: Save ccache
+      if: ${{ always() && (inputs.clean == false || inputs.clean == 'false') }}
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: ${{ env.CCACHE_DIR }}
+        key: ccache-${{ env.OP_MODEL }}-${{ inputs.optimize_level }}-${{ github.run_id }}-${{ github.run_attempt }}
 
     - name: Collect Build Stats / Validate Image
       id: collect_stats
