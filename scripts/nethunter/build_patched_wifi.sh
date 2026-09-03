@@ -14,6 +14,7 @@ case "$TARGET" in
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+KERNEL_SRC="${KERNEL_SRC:-$SCRIPT_DIR}"
 PATCH_DIR="$SCRIPT_DIR/patches/wifi"
 CLANG_DIR="kernel_platform/prebuilts/clang/host/linux-x86/clang-r487747c/bin"
 
@@ -74,7 +75,7 @@ MAKE_ARGS=(
   modules
 )
 
-make "${MAKE_ARGS[@]}" O="$OUT/build" || {
+make -C "$KERNEL_SRC" "${MAKE_ARGS[@]}" O="$OUT/build" || {
   echo "ERROR: Build failed" >&2
   exit 1
 }
