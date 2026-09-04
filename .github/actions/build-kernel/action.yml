@@ -1097,13 +1097,13 @@ runs:
         python3 "$GITHUB_WORKSPACE/scripts/fix_nomount_taskmmu.py" fs/proc/task_mmu.c
         grep -q '^extern void vfs_map_meta_override' fs/proc/task_mmu.c || { echo 'NoMount Suite: file-scope extern missing' >&2; exit 1; }
         grep -q 'vfs_map_meta_override(inode, &dev, &ino);' fs/proc/task_mmu.c || { echo 'NoMount Suite: direct call missing' >&2; exit 1; }
-        # NoMount Suite's function-pointer VFS hijacking is fundamentally
-        # incompatible with CONFIG_CFI_CLANG (generates GOT/PLT entries that
-        # the kernel linker rejects under ThinLTO). The working NMS builders
-        # use kernels without CFI for the same reason. Disable CFI when NoMount
-        # Suite is active.
-        sed -i '/^CONFIG_CFI_CLANG/d' arch/arm64/configs/gki_defconfig
-        echo 'CONFIG_CFI_CLANG=n' >> arch/arm64/configs/gki_defconfig
+        # NoMount Suite's function-pointer VFS hijacking generates GOT/PLT
+        # entries that ld.lld rejects under CONFIG_CFI_CLANG. Disable CFI via a
+        # proper kconfig fragment (appended LAST so it wins over any earlier
+        # =y in the defconfig). LTO stays untouched.
+        sed -i '/^CONFIG_CFI_CLANG/d;/^# CONFIG_CFI_CLANG is not set/d' arch/arm64/configs/gki_defconfig
+        sed -i '/^CONFIG_CFI_PERMISSIVE/d;/^# CONFIG_CFI_PERMISSIVE is not set/d' arch/arm64/configs/gki_defconfig
+        printf '# CONFIG_CFI_CLANG is not set\n# CONFIG_CFI_PERMISSIVE is not set\n' >> arch/arm64/configs/gki_defconfig
         grep -q '^CONFIG_NOMOUNT=y' arch/arm64/configs/gki_defconfig || echo 'CONFIG_NOMOUNT=y' >> arch/arm64/configs/gki_defconfig
         grep -q 'config NOMOUNT' fs/Kconfig || { echo 'NoMount Suite Kconfig patch not landed' >&2; exit 1; }
         grep -q 'obj-$(CONFIG_NOMOUNT) += nomount.o' fs/Makefile || { echo 'NoMount Suite Makefile patch not landed' >&2; exit 1; }
@@ -1843,11 +1843,9 @@ runs:
         
         
         make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" O="$OUT" olddefconfig
-        # NoMount Suite's function-pointer VFS hijacking generates GOT/PLT entries
-        # that ld.lld rejects under CONFIG_CFI_CLANG or any LTO mode. Disable both
-        # AFTER olddefconfig so olddefconfig doesn't re-enable them.
-        scripts/config --file "$OUT/.config" -d CFI_CLANG -d CFI_PERMISSIVE
-        scripts/config --file "$OUT/.config" -e LTO_CLANG_NONE -d LTO_CLANG_THIN -d LTO_CLANG_FULL -d LTO_CLANG
+        # Fail fast if CFI got re-enabled by olddefconfig — NoMount Suite's
+        # function-pointer VFS hijacking cannot link under CONFIG_CFI_CLANG.
+        grep -qx '# CONFIG_CFI_CLANG is not set' "$OUT/.config" || { echo '::error::CFI_CLANG still enabled — NoMount Suite cannot link with CFI. Add # CONFIG_CFI_CLANG is not set to defconfig before make gki_defconfig.'; exit 1; }
         bash "$GITHUB_WORKSPACE/scripts/verify_kernel_config.sh" "$OUT/.config" "$COMMON_KERNEL_FOLDER"
         cp "$OUT/.config" "$ARTIFACTS_FOLDER/${OP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}.config"
         
