@@ -1841,18 +1841,13 @@ runs:
             ;;
         esac
         
-        # NoMount Suite's function-pointer VFS hijacking generates GOT/PLT entries
-        # that ld.lld rejects under CONFIG_CFI_CLANG. Disable CFI when NoMount is
-        # active. Applied to generated .config so it survives olddefconfig.
-        scripts/config --file "$OUT/.config" -d CFI_CLANG -d CFI_PERMISSIVE
-        # NoMount Suite also requires LTO=none — ThinLTO/Full LTO generates
-        # GOT/PLT stubs for cross-object indirect calls that the kernel linker
-        # rejects ("Unexpected GOT/PLT entries detected!"). Force LTO_CLANG_NONE
-        # when NoMount Suite is active (after the OP_LTO case above).
-        scripts/config --file "$OUT/.config" -e LTO_CLANG_NONE -d LTO_CLANG_THIN -d LTO_CLANG_FULL
-        
         
         make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" O="$OUT" olddefconfig
+        # NoMount Suite's function-pointer VFS hijacking generates GOT/PLT entries
+        # that ld.lld rejects under CONFIG_CFI_CLANG or any LTO mode. Disable both
+        # AFTER olddefconfig so olddefconfig doesn't re-enable them.
+        scripts/config --file "$OUT/.config" -d CFI_CLANG -d CFI_PERMISSIVE
+        scripts/config --file "$OUT/.config" -e LTO_CLANG_NONE -d LTO_CLANG_THIN -d LTO_CLANG_FULL -d LTO_CLANG
         bash "$GITHUB_WORKSPACE/scripts/verify_kernel_config.sh" "$OUT/.config" "$COMMON_KERNEL_FOLDER"
         cp "$OUT/.config" "$ARTIFACTS_FOLDER/${OP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}.config"
         
