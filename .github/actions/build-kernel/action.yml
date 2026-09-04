@@ -1845,6 +1845,11 @@ runs:
         # that ld.lld rejects under CONFIG_CFI_CLANG. Disable CFI when NoMount is
         # active. Applied to generated .config so it survives olddefconfig.
         scripts/config --file "$OUT/.config" -d CFI_CLANG -d CFI_PERMISSIVE
+        # NoMount Suite also requires LTO=none — ThinLTO/Full LTO generates
+        # GOT/PLT stubs for cross-object indirect calls that the kernel linker
+        # rejects ("Unexpected GOT/PLT entries detected!"). Force LTO_CLANG_NONE
+        # when NoMount Suite is active (after the OP_LTO case above).
+        scripts/config --file "$OUT/.config" -e LTO_CLANG_NONE -d LTO_CLANG_THIN -d LTO_CLANG_FULL
         
         
         make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" O="$OUT" olddefconfig
