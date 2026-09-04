@@ -1841,6 +1841,11 @@ runs:
             ;;
         esac
         
+        # NoMount Suite's function-pointer VFS hijacking generates GOT/PLT entries
+        # that ld.lld rejects under CONFIG_CFI_CLANG. Disable CFI when NoMount is
+        # active. Applied to generated .config so it survives olddefconfig.
+        scripts/config --file "$OUT/.config" -d CFI_CLANG -d CFI_PERMISSIVE
+        
         
         make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" O="$OUT" olddefconfig
         bash "$GITHUB_WORKSPACE/scripts/verify_kernel_config.sh" "$OUT/.config" "$COMMON_KERNEL_FOLDER"
