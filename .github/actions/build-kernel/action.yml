@@ -1104,6 +1104,14 @@ runs:
         sed -i '/^CONFIG_CFI_CLANG/d;/^# CONFIG_CFI_CLANG is not set/d' arch/arm64/configs/gki_defconfig
         sed -i '/^CONFIG_CFI_PERMISSIVE/d;/^# CONFIG_CFI_PERMISSIVE is not set/d' arch/arm64/configs/gki_defconfig
         printf '# CONFIG_CFI_CLANG is not set\n# CONFIG_CFI_PERMISSIVE is not set\n' >> arch/arm64/configs/gki_defconfig
+        # The arm64 vmlinux.lds.S has a hard ASSERT(SIZEOF(.got.plt)==0||0x18).
+        # The engine's cross-object call to vfs_map_meta_override (and its VFS
+        # ops) make lld emit lazy PLT/GOT entries that trip it, independent of
+        # CFI/LTO (proven by isolation: fails with CFI off AND LTO=none).
+        # -fno-plt forces direct GOT loads instead of PLT stubs -> .got.plt empty.
+        # This is a per-file *compile* flag, so it survives ThinLTO.
+        grep -q 'CFLAGS_nomount.o' fs/Makefile || printf 'CFLAGS_nomount.o += -fno-plt\n' >> fs/Makefile
+        grep -q 'CFLAGS_task_mmu.o' fs/proc/Makefile || printf 'CFLAGS_task_mmu.o += -fno-plt\n' >> fs/proc/Makefile
         grep -q '^CONFIG_NOMOUNT=y' arch/arm64/configs/gki_defconfig || echo 'CONFIG_NOMOUNT=y' >> arch/arm64/configs/gki_defconfig
         grep -q 'config NOMOUNT' fs/Kconfig || { echo 'NoMount Suite Kconfig patch not landed' >&2; exit 1; }
         grep -q 'obj-$(CONFIG_NOMOUNT) += nomount.o' fs/Makefile || { echo 'NoMount Suite Makefile patch not landed' >&2; exit 1; }
@@ -1846,11 +1854,6 @@ runs:
         # Fail fast if CFI got re-enabled by olddefconfig — NoMount Suite's
         # function-pointer VFS hijacking cannot link under CONFIG_CFI_CLANG.
         grep -qx '# CONFIG_CFI_CLANG is not set' "$OUT/.config" || { echo '::error::CFI_CLANG still enabled — NoMount Suite cannot link with CFI. Add # CONFIG_CFI_CLANG is not set to defconfig before make gki_defconfig.'; exit 1; }
-        # ISOLATION TEST: force LTO none to test whether ThinLTO is what makes
-        # the NoMount Suite engine emit the rejected GOT/PLT entries. If the
-        # build links with LTO_NONE, ThinLTO is the culprit.
-        scripts/config --file "$OUT/.config" -e LTO_CLANG_NONE -d LTO_CLANG_THIN -d LTO_CLANG_FULL -d LTO_CLANG
-        grep -qx 'CONFIG_LTO_CLANG_NONE=y' "$OUT/.config" || echo '::warning::LTO_CLANG_NONE not confirmed set'
         bash "$GITHUB_WORKSPACE/scripts/verify_kernel_config.sh" "$OUT/.config" "$COMMON_KERNEL_FOLDER"
         cp "$OUT/.config" "$ARTIFACTS_FOLDER/${OP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}.config"
         
