@@ -1056,16 +1056,6 @@ runs:
         fi
         echo "✅ SUSFS patches applied"
         
-        # ksu_install_su_fd is referenced by the SUSFS exec.c patch but not
-        # defined in ReSukiSU. ThinLTO optimizes the call away (dead code —
-        # is_su_session is always false); LTO=none needs a real definition or
-        # ld.lld fails with "undefined symbol: ksu_install_su_fd". Stub is
-        # safe: only reached when is_su_session && retval >= 0.
-        if ! grep -q '^int ksu_install_su_fd' "$COMMON_KERNEL_FOLDER/fs/exec.c"; then
-          printf '\n#ifdef CONFIG_KSU_SUSFS\nint ksu_install_su_fd(void) { return 0; }\n#endif\n' >> "$COMMON_KERNEL_FOLDER/fs/exec.c"
-        fi
-        grep -q '^int ksu_install_su_fd' "$COMMON_KERNEL_FOLDER/fs/exec.c" || { echo 'ksu_install_su_fd stub missing' >&2; exit 1; }
-        
         echo "Add SUSFS Configuration Settings"
         cat >> "$COMMON_KERNEL_FOLDER/arch/arm64/configs/gki_defconfig" <<EOF
         CONFIG_KSU_SUSFS=y
