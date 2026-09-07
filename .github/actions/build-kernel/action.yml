@@ -1091,12 +1091,27 @@ runs:
         git -C NoMount-Suite checkout --detach FETCH_HEAD
         test "$(git -C NoMount-Suite rev-parse HEAD)" = "${{ inputs.nomount_commit }}"
         cd common
-        patch -p1 --forward < ../NoMount-Suite/hookless/patches/nomount_kernel_integration.patch
+        NM_PATCH="../NoMount-Suite/hookless/patches/nomount_kernel_integration.patch"
+        # Fuzz 0 FIRST. Bouteillepleine's apply_nomount_stack.sh enforces this
+        # because a fuzzed hunk can land a hook in the wrong function silently
+        # (two fs/proc/task_mmu.c functions have character-identical context).
+        if patch -p1 -F0 --forward --dry-run <"$NM_PATCH" >/dev/null 2>&1; then
+          patch -p1 -F0 --forward <"$NM_PATCH"
+          echo "  hookless integration: applied at fuzz 0"
+        elif patch -p1 -F0 --reverse --dry-run <"$NM_PATCH" >/dev/null 2>&1; then
+          echo "  hookless integration: already applied"
+        else
+          echo "::warning::hookless integration patch does not apply at fuzz 0; retrying at fuzz 1. A fuzzed hunk can land a hook in the wrong function — check fs/proc/task_mmu.c in the build output."
+          patch -p1 --forward --fuzz=1 <"$NM_PATCH" || { echo 'NoMount Suite: patch failed at fuzz 0 and fuzz 1' >&2; exit 1; }
+        fi
         cp ../NoMount-Suite/hookless/src/nomount.c ../NoMount-Suite/hookless/src/nomount.h fs/
         # Post-patch: fix block-scope extern for ThinLTO+CFI compatibility.
         python3 "$GITHUB_WORKSPACE/scripts/fix_nomount_taskmmu.py" fs/proc/task_mmu.c
         grep -q '^extern void vfs_map_meta_override' fs/proc/task_mmu.c || { echo 'NoMount Suite: file-scope extern missing' >&2; exit 1; }
         grep -q 'vfs_map_meta_override(inode, &dev, &ino);' fs/proc/task_mmu.c || { echo 'NoMount Suite: direct call missing' >&2; exit 1; }
+        # Verify the hook landed inside show_map_vma(), not a sibling function
+        # with identical context (the reason fuzz-0 is mandatory above).
+        python3 "$GITHUB_WORKSPACE/scripts/fix_nomount_taskmmu.py" --verify-placement fs/proc/task_mmu.c
         # NoMount Suite's function-pointer VFS hijacking generates GOT/PLT
         # entries that ld.lld rejects under CONFIG_CFI_CLANG. Disable CFI via a
         # proper kconfig fragment (appended LAST so it wins over any earlier
