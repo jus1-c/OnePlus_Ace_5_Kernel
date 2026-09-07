@@ -1062,12 +1062,7 @@ runs:
         # ld.lld fails with "undefined symbol: ksu_install_su_fd". Stub is
         # safe: only reached when is_su_session && retval >= 0.
         if ! grep -q '^int ksu_install_su_fd' "$COMMON_KERNEL_FOLDER/fs/exec.c"; then
-          cat >> "$COMMON_KERNEL_FOLDER/fs/exec.c" <<'KSU_STUB'
-
-#ifdef CONFIG_KSU_SUSFS
-int ksu_install_su_fd(void) { return 0; }
-#endif
-KSU_STUB
+          printf '\n#ifdef CONFIG_KSU_SUSFS\nint ksu_install_su_fd(void) { return 0; }\n#endif\n' >> "$COMMON_KERNEL_FOLDER/fs/exec.c"
         fi
         grep -q '^int ksu_install_su_fd' "$COMMON_KERNEL_FOLDER/fs/exec.c" || { echo 'ksu_install_su_fd stub missing' >&2; exit 1; }
         
