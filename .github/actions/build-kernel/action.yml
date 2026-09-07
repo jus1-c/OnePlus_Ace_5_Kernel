@@ -358,7 +358,7 @@ runs:
         echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
         echo "CCACHE_LOGFILE=$GITHUB_WORKSPACE/ccache.log" >> "$GITHUB_ENV"
         echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
-        echo "CCACHE_MAXSIZE=5G" >> "$GITHUB_ENV"
+        echo "CCACHE_MAXSIZE=12G" >> "$GITHUB_ENV"
         
         DEBUG_ZIP_NAME="debug_${OP_MODEL}_${OP_OS_VERSION}.zip"
         echo "DEBUG_ZIP_NAME=$DEBUG_ZIP_NAME" >> "$GITHUB_ENV"
@@ -662,16 +662,6 @@ runs:
         export RUSTTARGET="aarch64-linux-android"
         make V=1 rustavailable
         echo "::endgroup::"
-
-    - name: Restore ccache
-      if: ${{ inputs.clean == false || inputs.clean == 'false' }}
-      id: ccache_restore
-      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-      with:
-        path: ${{ env.CCACHE_DIR }}
-        key: ccache-${{ env.OP_MODEL }}-${{ inputs.optimize_level }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: |
-          ccache-${{ env.OP_MODEL }}-${{ inputs.optimize_level }}-
 
     - name: Check and Prepare Caches
       shell: bash
@@ -1055,15 +1045,7 @@ runs:
           fi
         fi
         echo "✅ SUSFS patches applied"
-
-        # ksu_install_su_fd is referenced by the SUSFS exec.c patch but not
-        # defined in ReSukiSU. Newer SUSFS versions reference it in code paths
-        # that ThinLTO cannot optimize away. Stub is safe: only called when
-        # is_su_session && retval >= 0.
-        if ! grep -q '^int ksu_install_su_fd' "$COMMON_KERNEL_FOLDER/fs/exec.c"; then
-          printf '\n#ifdef CONFIG_KSU_SUSFS\nint ksu_install_su_fd(void) { return 0; }\n#endif\n' >> "$COMMON_KERNEL_FOLDER/fs/exec.c"
-        fi
-        grep -q '^int ksu_install_su_fd' "$COMMON_KERNEL_FOLDER/fs/exec.c" || { echo 'ksu_install_su_fd stub missing' >&2; exit 1; }
+        
         echo "Add SUSFS Configuration Settings"
         cat >> "$COMMON_KERNEL_FOLDER/arch/arm64/configs/gki_defconfig" <<EOF
         CONFIG_KSU_SUSFS=y
@@ -1087,65 +1069,41 @@ runs:
         
         echo "::endgroup::"
 
-    - name: Add NoMount Suite (Prism engine)
+    - name: Add NoMount
       shell: bash
       run: |
         set -euo pipefail
-        echo "::group::Add NoMount Suite (Prism engine)"
+        echo "::group::Add NoMount"
         cd "$KERNEL_PLATFORM_FOLDER"
-        rm -rf common/fs/nomount common/fs/nomount.c common/fs/nomount.h
-        git clone --no-checkout https://github.com/Bouteillepleine/NoMount-Suite.git NoMount-Suite
-        git -C NoMount-Suite fetch --depth=1 origin "${{ inputs.nomount_commit }}"
-        git -C NoMount-Suite checkout --detach FETCH_HEAD
-        test "$(git -C NoMount-Suite rev-parse HEAD)" = "${{ inputs.nomount_commit }}"
-        cd common
-        NM_PATCH="../NoMount-Suite/hookless/patches/nomount_kernel_integration.patch"
-        # Fuzz 0 FIRST. Bouteillepleine's apply_nomount_stack.sh enforces this
-        # because a fuzzed hunk can land a hook in the wrong function silently
-        # (two fs/proc/task_mmu.c functions have character-identical context).
-        if patch -p1 -F0 --forward --dry-run <"$NM_PATCH" >/dev/null 2>&1; then
-          patch -p1 -F0 --forward <"$NM_PATCH"
-          echo "  hookless integration: applied at fuzz 0"
-        elif patch -p1 -F0 --reverse --dry-run <"$NM_PATCH" >/dev/null 2>&1; then
-          echo "  hookless integration: already applied"
-        else
-          echo "::warning::hookless integration patch does not apply at fuzz 0; retrying at fuzz 1. A fuzzed hunk can land a hook in the wrong function — check fs/proc/task_mmu.c in the build output."
-          patch -p1 --forward --fuzz=1 <"$NM_PATCH" || { echo 'NoMount Suite: patch failed at fuzz 0 and fuzz 1' >&2; exit 1; }
-        fi
-        cp ../NoMount-Suite/hookless/src/nomount.c ../NoMount-Suite/hookless/src/nomount.h fs/
-        # Post-patch: fix block-scope extern for ThinLTO+CFI compatibility.
-        python3 "$GITHUB_WORKSPACE/scripts/fix_nomount_taskmmu.py" fs/proc/task_mmu.c
-        grep -q '^extern void vfs_map_meta_override' fs/proc/task_mmu.c || { echo 'NoMount Suite: file-scope extern missing' >&2; exit 1; }
-        grep -q 'vfs_map_meta_override(inode, &dev, &ino);' fs/proc/task_mmu.c || { echo 'NoMount Suite: direct call missing' >&2; exit 1; }
-        # Verify the hook landed inside show_map_vma(), not a sibling function
-        # with identical context (the reason fuzz-0 is mandatory above).
-        python3 "$GITHUB_WORKSPACE/scripts/fix_nomount_taskmmu.py" --verify-placement fs/proc/task_mmu.c
-        # NoMount Suite's function-pointer VFS hijacking generates GOT/PLT
-        # entries that ld.lld rejects under CONFIG_CFI_CLANG. Disable CFI via a
-        # proper kconfig fragment (appended LAST so it wins over any earlier
-        # =y in the defconfig). LTO stays untouched.
-        sed -i '/^CONFIG_CFI_CLANG/d;/^# CONFIG_CFI_CLANG is not set/d' arch/arm64/configs/gki_defconfig
-        sed -i '/^CONFIG_CFI_PERMISSIVE/d;/^# CONFIG_CFI_PERMISSIVE is not set/d' arch/arm64/configs/gki_defconfig
-        printf '# CONFIG_CFI_CLANG is not set\n# CONFIG_CFI_PERMISSIVE is not set\n' >> arch/arm64/configs/gki_defconfig
-        # The arm64 vmlinux.lds.S has TWO hard ASSERT()s that the NoMount Suite
-        # engine trips (proven independent of CFI/LTO by isolation: fails even
-        # with CFI off AND LTO=none; -fno-plt per-file also did not help because
-        # ThinLTO re-materializes GOT entries at the backend). These GOT/PLT
-        # entries are valid STATIC relocations resolved at link time (the kernel
-        # is not dynamically linked) — the asserts are only tripwires for
-        # "unexpected" output, not a runtime hazard. Relax both to ASSERT(1) so
-        # the engine links. Safe to revert: delete these two sed lines.
-        LDS=arch/arm64/kernel/vmlinux.lds.S
-        sed -i 's/SIZEOF(\.got\.plt) == 0 || SIZEOF(\.got\.plt) == 0x18/1/' "$LDS"
-        sed -i 's/SIZEOF(\.plt) == 0/1/' "$LDS"
-        grep -q 'SIZEOF(.got.plt) == 0' "$LDS" && { echo 'NoMount Suite: GOT/PLT lds assert not relaxed' >&2; exit 1; }
-        grep -q '^CONFIG_NOMOUNT=y' arch/arm64/configs/gki_defconfig || echo 'CONFIG_NOMOUNT=y' >> arch/arm64/configs/gki_defconfig
-        grep -q 'config NOMOUNT' fs/Kconfig || { echo 'NoMount Suite Kconfig patch not landed' >&2; exit 1; }
-        grep -q 'obj-$(CONFIG_NOMOUNT) += nomount.o' fs/Makefile || { echo 'NoMount Suite Makefile patch not landed' >&2; exit 1; }
-        grep -q 'vfs_map_meta_override' fs/proc/task_mmu.c || { echo 'NoMount Suite task_mmu.c patch not landed' >&2; exit 1; }
-        test -f fs/nomount.c && test -f fs/nomount.h || { echo 'NoMount Suite fs/nomount.c/h missing' >&2; exit 1; }
-        echo "NOMOUNT_SUITE_COMMIT=${{ inputs.nomount_commit }}" >> "$GITHUB_ENV"
-        echo "✅ NoMount Suite added (commit: ${{ inputs.nomount_commit }})"
+        git clone --no-checkout https://github.com/maxsteeel/nomount.git NoMount
+        git -C NoMount fetch --depth=1 origin "${{ inputs.nomount_commit }}"
+        git -C NoMount checkout --detach FETCH_HEAD
+        test "$(git -C NoMount rev-parse HEAD)" = "${{ inputs.nomount_commit }}"
+        mkdir -p common/fs/nomount
+        cp NoMount/kernel/src/Kconfig NoMount/kernel/src/Makefile NoMount/kernel/src/nomount.c NoMount/kernel/src/nomount.h common/fs/nomount/
+        insert_before_last_endmenu() {
+          local file="$1" line="$2"
+          grep -Fqx "$line" "$file" && return 0
+          awk -v line="$line" '
+            { lines[NR] = $0 }
+            END {
+              last = 0
+              for (i = 1; i <= NR; i++)
+                if (lines[i] ~ /^endmenu[[:space:]]*$/) last = i
+              if (!last) print line
+              for (i = 1; i <= NR; i++) {
+                if (i == last) print line
+                print lines[i]
+              }
+            }
+          ' "$file" > "$file.tmp"
+          mv "$file.tmp" "$file"
+        }
+        insert_before_last_endmenu common/fs/Kconfig 'source "fs/nomount/Kconfig"'
+        grep -q 'obj-$(CONFIG_NOMOUNT) += nomount/' common/fs/Makefile || printf '\nobj-$(CONFIG_NOMOUNT) += nomount/\n' >> common/fs/Makefile
+        echo 'CONFIG_NOMOUNT=y' >> common/arch/arm64/configs/gki_defconfig
+        echo "NOMOUNT_COMMIT_SHA=${{ inputs.nomount_commit }}" >> "$GITHUB_ENV"
+        echo "✅ NoMount added (commit: ${{ inputs.nomount_commit }})"
         echo "::endgroup::"
 
     - name: Add BBG
@@ -1878,9 +1836,6 @@ runs:
         
         
         make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" O="$OUT" olddefconfig
-        # Fail fast if CFI got re-enabled by olddefconfig — NoMount Suite's
-        # function-pointer VFS hijacking cannot link under CONFIG_CFI_CLANG.
-        grep -qx '# CONFIG_CFI_CLANG is not set' "$OUT/.config" || { echo '::error::CFI_CLANG still enabled — NoMount Suite cannot link with CFI. Add # CONFIG_CFI_CLANG is not set to defconfig before make gki_defconfig.'; exit 1; }
         bash "$GITHUB_WORKSPACE/scripts/verify_kernel_config.sh" "$OUT/.config" "$COMMON_KERNEL_FOLDER"
         cp "$OUT/.config" "$ARTIFACTS_FOLDER/${OP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}.config"
         
@@ -2033,13 +1988,6 @@ runs:
         echo '```' >> $GITHUB_STEP_SUMMARY
         ccache -s --verbose >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
-
-    - name: Save ccache
-      if: ${{ always() && (inputs.clean == false || inputs.clean == 'false') }}
-      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-      with:
-        path: ${{ env.CCACHE_DIR }}
-        key: ccache-${{ env.OP_MODEL }}-${{ inputs.optimize_level }}-${{ github.run_id }}-${{ github.run_attempt }}
 
     - name: Collect Build Stats / Validate Image
       id: collect_stats
