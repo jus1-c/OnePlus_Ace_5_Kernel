@@ -75,7 +75,7 @@ jobs:
               "https://raw.githubusercontent.com/${wild_repo}/${wild_sha}/${config_path}")
             manifest=$(jq -r '.manifest' <<< "$config")
             manifest_url="https://raw.githubusercontent.com/${wild_repo}/${wild_sha}/manifests/a16/${manifest}"
-            entry=$(jq -c --arg manifest_url "$manifest_url" '. + {manifest:$manifest_url, ksu_type:"ReSukiSU", uname:"OP-ACE5-RESUKISU", blacklist_modules:""}' <<< "$config")
+            entry=$(jq -c --arg manifest_url "$manifest_url" '. + {manifest:$manifest_url, ksu_type:"ReSukiSU", uname:"OP-ACE5-RESUKISU", blacklist_modules:"", lto:"none"}' <<< "$config")
             matrix=$(jq -c --argjson entry "$entry" '. + [$entry]' <<< "$matrix")
           done
           [[ $(jq 'length' <<< "$matrix") -gt 0 ]] || { echo 'Empty Ace 5 matrix' >&2; exit 1; }
