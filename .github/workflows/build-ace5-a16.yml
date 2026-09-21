@@ -235,7 +235,7 @@ jobs:
           retention-days: 90
 
   nomount-module:
-    name: Package NoMount userspace
+    name: Fetch NoMount release
     needs: resolve
     runs-on: ubuntu-latest
     steps:
@@ -244,54 +244,22 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Install build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends curl ca-certificates xz-utils zip coreutils
-
-      - name: Build NoMount module from resolved commit
+      - name: Download NoMount release module
         env:
-          NOMOUNT_SHA: ${{ fromJSON(needs.resolve.outputs.sources).nomount_sha }}
+          SOURCES: ${{ needs.resolve.outputs.sources }}
         run: |
           set -euo pipefail
-          curl --fail --location --silent --show-error \
-            https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz -o zig.tar.xz
-          echo '473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982  zig.tar.xz' | sha256sum -c -
-          tar -xf zig.tar.xz
-          export PATH="$PWD/zig-linux-x86_64-0.14.0:$PATH"
-          git clone --no-checkout https://github.com/maxsteeel/nomount.git nomount
-          git -C nomount fetch --depth=1 origin "$NOMOUNT_SHA"
-          git -C nomount checkout --detach FETCH_HEAD
-          test "$(git -C nomount rev-parse HEAD)" = "$NOMOUNT_SHA"
-          mkdir -p package/bin
-          zig cc -target aarch64-linux -Oz -mcmodel=tiny -static -nostdlib -ffreestanding \
-            -fno-unwind-tables -fno-ident -Wno-invalid-noreturn -Wl,--entry=_start \
-            nomount/userspace/src/nm.c -o package/bin/nm-arm64
-          git clone --no-checkout "https://github.com/${{ fromJSON(needs.resolve.outputs.sources).loader_repo }}.git" ko-loader
-          git -C ko-loader fetch --depth=1 origin "${{ fromJSON(needs.resolve.outputs.sources).loader_sha }}"
-          git -C ko-loader checkout --detach FETCH_HEAD
-          test "$(git -C ko-loader rev-parse HEAD)" = "${{ fromJSON(needs.resolve.outputs.sources).loader_sha }}"
-          make -C ko-loader TARGET=aarch64-linux
-           loader_bin="ko-loader/ko-loader"
-           [[ -f "$loader_bin" ]] || loader_bin="ko-loader/lkmloader"
-           [[ -f "$loader_bin" ]] || { echo 'ko-loader output missing' >&2; exit 1; }
-           cp "$loader_bin" package/bin/ko-loader-arm64
-          cp -a nomount/module/. package/
-          NOMOUNT_BASE_VERSION=$(awk -F= '$1 == "version" { print $2; exit }' package/module.prop | tr -cd '[:alnum:]._-')
-          NOMOUNT_BASE_VERSION="${NOMOUNT_BASE_VERSION:-dev}"
-          NOMOUNT_BRANCH="${{ fromJSON(needs.resolve.outputs.sources).nomount_branch }}"
-          NOMOUNT_SHORT_SHA="${NOMOUNT_SHA:0:12}"
-          RUN_SHA="${NOMOUNT_SHORT_SHA}-$(date -u +%Y%m%d%H%M%S)"
-          sed -i "s/^version=.*/version=dev-${RUN_SHA}/" package/module.prop
-          sed -i "s/^versionCode=.*/versionCode=${GITHUB_RUN_ID:-0}/" package/module.prop
-          sha256sum package/bin/ko-loader-arm64 > package/bin/ko-loader-arm64.sha256
-          sha256sum package/bin/nm-arm64 > package/bin/nm-arm64.sha256
-          NOMOUNT_ZIP="NoMount-${NOMOUNT_BASE_VERSION}-${NOMOUNT_BRANCH}-${NOMOUNT_SHORT_SHA}.zip"
-          (cd package && zip -r9 "../${NOMOUNT_ZIP}" .)
+          url=$(jq -r '.nomount_asset_url' <<< "$SOURCES")
+          digest=$(jq -r '.nomount_asset_sha256' <<< "$SOURCES")
+          name="NoMount-$(jq -r '.nomount_tag' <<< "$SOURCES")-release.zip"
+          curl --fail --location --silent --show-error "$url" -o "$name"
+          printf '%s  %s\n' "$digest" "$name" | sha256sum -c -
 
       - name: Upload NoMount module
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nomount-module
-          path: NoMount-*.zip
+          path: NoMount-*-release.zip
           archive: false
           compression-level: 0
           if-no-files-found: error
@@ -342,24 +310,22 @@ jobs:
 
           wild_release=$(jq -r '.wild_release' <<< "$SOURCES")
           wild_sha=$(jq -r '.wild_sha' <<< "$SOURCES")
-          nomount_branch=$(jq -r '.nomount_branch' <<< "$SOURCES")
+          nomount_tag=$(jq -r '.nomount_tag' <<< "$SOURCES")
           nomount_sha=$(jq -r '.nomount_sha' <<< "$SOURCES")
           nomount_short_sha="${nomount_sha:0:12}"
           nomount_asset=$(basename "${nomount_zips[0]}")
-          nomount_suffix="-${nomount_branch}-${nomount_short_sha}.zip"
-          [[ "$nomount_asset" == NoMount-*"$nomount_suffix" ]] || {
+          [[ "$nomount_asset" == "NoMount-${nomount_tag}-release.zip" ]] || {
             echo "NoMount asset has unexpected name: $nomount_asset" >&2
             exit 1
           }
-          nomount_version="${nomount_asset#NoMount-}"
-          nomount_version="${nomount_version%$nomount_suffix}"
+          nomount_version="$nomount_tag"
 
           find release-assets -maxdepth 1 -type f ! -name 'AK3_*.zip' ! -name "$nomount_asset" ! -name 'vpnhide-builtin.zip' ! -name 'vpnhide.apk' -delete
           jq . <<< "$SOURCES" > release-assets/resolved-sources.json
           sha256sum release-assets/*.zip | sort -k2 > release-assets/00_CHECKSUMS.txt
 
           vpnhide_tag=$(jq -r '.vpnhide_tag' <<< "$SOURCES")
-          release_tag="ace5-${wild_release}-nm-${nomount_branch}-${nomount_short_sha}-vpnhide-${vpnhide_tag}"
+          release_tag="ace5-${wild_release}-nm-${nomount_tag}-vpnhide-${vpnhide_tag}"
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             release_tag="${release_tag}-r${GITHUB_RUN_NUMBER}"
           fi
@@ -402,7 +368,7 @@ jobs:
             echo "|---|---|"
             printf '| WildKernel release | `%s` |\n' "$wild_release"
             printf '| WildKernel commit | `%s` |\n' "$wild_sha"
-            printf '| NoMount branch | `%s` |\n' "$nomount_branch"
+            printf '| NoMount release | `%s` |\n' "$nomount_tag"
             printf '| NoMount commit | `%s` |\n' "$nomount_sha"
             echo "| Root | ReSukiSU |"
             printf '| Optimization | `%s` |\n' '${{ inputs.optimize_level }}'
@@ -444,7 +410,7 @@ jobs:
           set -euo pipefail
           nomount_sha=$(jq -r '.nomount_sha' <<< "$SOURCES")
           nomount_short_sha="${nomount_sha:0:12}"
-          nomount_branch=$(jq -r '.nomount_branch' <<< "$SOURCES")
+          nomount_tag=$(jq -r '.nomount_tag' <<< "$SOURCES")
           nomount_asset=$(basename "$(find release-assets -maxdepth 1 -type f -name 'NoMount-*.zip' | head -1)")
           zip_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${nomount_asset}"
           cat > release-assets/update.json <<EOF
@@ -452,7 +418,7 @@ jobs:
             "version": "${NOMOUNT_VERSION}",
             "versionCode": ${GITHUB_RUN_ID},
             "zipUrl": "${zip_url}",
-            "changelog": "Build from nomount/${nomount_branch}@${nomount_short_sha}\nRun: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            "changelog": "Official NoMount release ${nomount_tag}\nRun: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           }
           EOF
           echo "Generated update.json:"

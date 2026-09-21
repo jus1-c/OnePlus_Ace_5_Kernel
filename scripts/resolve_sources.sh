@@ -4,7 +4,6 @@ set -euo pipefail
 repo="${WILD_REPO:-WildKernels/OnePlus_KernelSU_SUSFS}"
 resukisu_repo="${RESUKISU_REPO:-ReSukiSU/ReSukiSU}"
 nomount_repo="${NOMOUNT_REPO:-maxsteeel/nomount}"
-nomount_branch="${NOMOUNT_BRANCH:-dev}"
 kernel_patches_repo="${KERNEL_PATCHES_REPO:-WildKernels/kernel_patches}"
 vpnhide_repo="${VPNHIDE_REPO:-okhsunrog/vpnhide}"
 wild_release_json=$(mktemp)
@@ -48,26 +47,22 @@ echo "SUSFS upstream: simonpunk/susfs4ksu@gki-android14-6.1 (${susfs_sha:0:8})" 
 resukisu_sha=$(api "https://api.github.com/repos/${resukisu_repo}/commits/main" | jq -r '.sha // empty')
 [[ "$resukisu_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Cannot resolve ReSukiSU main' >&2; exit 1; }
 
-nomount_sha=''
-nomount_run_url=''
-for page in 1 2 3 4 5; do
-  runs=$(api "https://api.github.com/repos/${nomount_repo}/actions/runs?branch=${nomount_branch}&per_page=100&page=${page}")
-  while IFS=$'\t' read -r sha status conclusion url; do
-    [[ "$status" == completed && "$conclusion" == success ]] || continue
-    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
-    check_runs=$(api "https://api.github.com/repos/${nomount_repo}/commits/${sha}/check-runs?per_page=100")
-    total=$(jq -r '.total_count // 0' <<< "$check_runs")
-    passed=$(jq '[.check_runs[] | select(.status == "completed" and .conclusion == "success")] | length' <<< "$check_runs")
-    [[ "$total" -gt 0 && "$passed" -eq "$total" ]] || continue
-    status_json=$(api "https://api.github.com/repos/${nomount_repo}/commits/${sha}/status")
-    status_count=$(jq -r '.total_count // 0' <<< "$status_json")
-    [[ "$status_count" == 0 || "$(jq -r '.state' <<< "$status_json")" == success ]] || continue
-    nomount_sha="$sha"
-    nomount_run_url="$url"
-    break 2
-  done < <(jq -r '.workflow_runs[] | [.head_sha,.status,.conclusion,.html_url] | @tsv' <<< "$runs")
-done
-[[ "$nomount_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "No green NoMount ${nomount_branch} commit found" >&2; exit 1; }
+nomount_release=$(api "https://api.github.com/repos/${nomount_repo}/releases/latest")
+nomount_tag=$(jq -r '.tag_name // empty' <<< "$nomount_release")
+[[ -n "$nomount_tag" ]] || { echo "No latest NoMount release found in $nomount_repo" >&2; exit 1; }
+if ! jq -e '.draft == false and .prerelease == false' <<< "$nomount_release" >/dev/null; then
+  echo "Latest NoMount release is draft or prerelease: $nomount_tag" >&2
+  exit 1
+fi
+nomount_sha=$(resolve_ref "$nomount_repo" "$nomount_tag")
+[[ "$nomount_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Cannot resolve NoMount tag $nomount_tag" >&2; exit 1; }
+nomount_asset=$(jq -er --arg name "NoMount-${nomount_tag}-release.zip" '
+  [.assets[] | select(.name == $name)] as $matches |
+  if ($matches | length) != 1 then error("expected one NoMount asset: " + $name)
+  elif (($matches[0].digest // "") | test("^sha256:[0-9a-f]{64}$") | not) then error("NoMount asset lacks SHA-256 digest")
+  else {url:$matches[0].browser_download_url,sha256:($matches[0].digest | sub("^sha256:"; ""))}
+  end
+' <<< "$nomount_release")
 
 kernel_patches_sha=$(api "https://api.github.com/repos/${kernel_patches_repo}/commits?sha=main&until=${wild_published_at}&per_page=1" | jq -r '.[0].sha // empty')
 [[ "$kernel_patches_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Cannot resolve kernel_patches main' >&2; exit 1; }
@@ -119,9 +114,10 @@ manifests=$(api "https://api.github.com/repos/${repo}/git/trees/${wild_sha}?recu
   --arg resukisu_repo "$resukisu_repo" \
   --arg resukisu_sha "$resukisu_sha" \
   --arg nomount_repo "$nomount_repo" \
-  --arg nomount_branch "$nomount_branch" \
-  --arg nomount_sha "$nomount_sha" \
-  --arg nomount_run_url "$nomount_run_url" \
+   --arg nomount_tag "$nomount_tag" \
+   --arg nomount_sha "$nomount_sha" \
+   --arg nomount_asset_url "$(jq -r '.url' <<< "$nomount_asset")" \
+   --arg nomount_asset_sha256 "$(jq -r '.sha256' <<< "$nomount_asset")" \
   --arg kernel_patches_repo "$kernel_patches_repo" \
   --arg kernel_patches_sha "$kernel_patches_sha" \
   --arg vpnhide_repo "$vpnhide_repo" \
@@ -139,7 +135,8 @@ manifests=$(api "https://api.github.com/repos/${repo}/git/trees/${wild_sha}?recu
   --argjson manifests "$manifests" \
   '{wild_repo:$wild_repo,wild_release:$wild_tag,wild_sha:$wild_sha,wild_published_at:$wild_published_at,susfs_sha:$susfs_sha,
     resukisu_repo:$resukisu_repo,resukisu_sha:$resukisu_sha,
-     nomount_repo:$nomount_repo,nomount_branch:$nomount_branch,nomount_sha:$nomount_sha,nomount_run_url:$nomount_run_url,
+      nomount_repo:$nomount_repo,nomount_tag:$nomount_tag,nomount_sha:$nomount_sha,
+      nomount_asset_url:$nomount_asset_url,nomount_asset_sha256:$nomount_asset_sha256,
      kernel_patches_repo:$kernel_patches_repo,kernel_patches_sha:$kernel_patches_sha,
      vpnhide_repo:$vpnhide_repo,vpnhide_tag:$vpnhide_tag,vpnhide_sha:$vpnhide_sha,
      vpnhide_builtin_url:$vpnhide_builtin_url,vpnhide_builtin_sha256:$vpnhide_builtin_sha256,

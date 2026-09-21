@@ -17,5 +17,18 @@ grep -q 'CONFIG_VPNHIDE=y' "$config"
 grep -q 'CONFIG_VPNHIDE_FS_HIDING=y' "$config"
 grep -q 'vpnhide-builtin.zip' "$workflow"
 grep -q 'vpnhide.apk' "$workflow"
+grep -q 'releases/latest' "$resolver"
+grep -q 'nomount_tag' "$resolver"
+grep -q 'nomount_asset_url' "$resolver"
+if grep -q 'actions/runs?branch=${nomount_branch}' "$resolver"; then
+  echo 'NoMount resolver still tracks branch CI runs' >&2
+  exit 1
+fi
+if grep -q 'ziglang.org/download' "$workflow"; then
+  echo 'NoMount workflow still rebuilds a dev module' >&2
+  exit 1
+fi
+grep -q 'NoMount release' "$workflow"
+grep -q 'nomount_tag' "$workflow"
 
 echo 'VPNHide integration contract passed'
