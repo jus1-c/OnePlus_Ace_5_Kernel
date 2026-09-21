@@ -408,7 +408,17 @@ jobs:
             printf '| Optimization | `%s` |\n' '${{ inputs.optimize_level }}'
             printf '| Clean build | `%s` |\n' '${{ inputs.clean_build }}'
             echo
-            echo "## Installation"
+             echo "## VPNHide"
+             echo
+             echo "VPNHide built-in backend is compiled into both kernels with CONFIG_VPNHIDE=y and CONFIG_VPNHIDE_FS_HIDING=y."
+             echo
+             echo '1. Install `vpnhide-builtin.zip` as a KernelSU/Magisk module.'
+             echo '2. Install `vpnhide.apk`.'
+             echo '3. Enable VPN Hide in LSPosed with `System Framework` in scope.'
+             echo '4. Reboot, then configure target apps in VPN Hide.'
+             echo '5. Do not install VPNHide kmod, KPM, or Zygisk together with the built-in backend.'
+             echo
+             echo "## Installation"
             echo
             echo "1. Select ZIP matching exact device and kernel version."
             echo "2. Keep stock boot image for rollback."
