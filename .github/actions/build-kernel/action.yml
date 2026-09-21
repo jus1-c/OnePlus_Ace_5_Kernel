@@ -780,7 +780,19 @@ runs:
               sleep 5
               attempt=$((attempt + 1))
           done
-          
+
+          if [[ "$url" == *"gitlab.com"* ]]; then
+            echo "⚠️ Archive fetch failed; falling back to shallow GitLab clone"
+            rm -rf "$repo_name" "$shm_path" 2>/dev/null
+            if git clone --filter=blob:none --no-checkout "$url" "$repo_name" &&
+               git -C "$repo_name" fetch --depth=1 origin "$branch" &&
+               git -C "$repo_name" checkout --detach FETCH_HEAD; then
+              echo "✅ Success: $repo_name synced via git fallback"
+              return 0
+            fi
+            rm -rf "$repo_name" 2>/dev/null
+          fi
+
           echo "::error::All attempts failed for $url"
           return 1
         }
