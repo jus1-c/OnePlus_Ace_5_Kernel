@@ -270,7 +270,10 @@ jobs:
           git -C ko-loader checkout --detach FETCH_HEAD
           test "$(git -C ko-loader rev-parse HEAD)" = "${{ fromJSON(needs.resolve.outputs.sources).loader_sha }}"
           make -C ko-loader TARGET=aarch64-linux
-          cp ko-loader/ko-loader package/bin/ko-loader-arm64
+           loader_bin="ko-loader/ko-loader"
+           [[ -f "$loader_bin" ]] || loader_bin="ko-loader/lkmloader"
+           [[ -f "$loader_bin" ]] || { echo 'ko-loader output missing' >&2; exit 1; }
+           cp "$loader_bin" package/bin/ko-loader-arm64
           cp -a nomount/module/. package/
           NOMOUNT_BASE_VERSION=$(awk -F= '$1 == "version" { print $2; exit }' package/module.prop | tr -cd '[:alnum:]._-')
           NOMOUNT_BASE_VERSION="${NOMOUNT_BASE_VERSION:-dev}"
