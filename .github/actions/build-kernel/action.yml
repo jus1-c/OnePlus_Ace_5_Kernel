@@ -27,6 +27,12 @@ inputs:
   kernel_patches_commit:
     description: 'Pinned Wild kernel patches commit'
     required: true
+  vpnhide_repo:
+    description: 'VPNHide repository'
+    required: true
+  vpnhide_commit:
+    description: 'Pinned VPNHide release commit'
+    required: true
   susfs_commit_hash_or_branch:
     description: 'SUSFS branch or commit hash (empty = auto-detect by kernel version)'
     required: false
@@ -340,6 +346,7 @@ runs:
         DEBUG_ARTIFACTS_DIR="$GITHUB_WORKSPACE/debug_artifacts"
         KERNEL_PATCHES_DIR="$GITHUB_WORKSPACE/kernel_patches"
         SUSFS_DIR="$GITHUB_WORKSPACE/susfs4ksu"
+        VPNHIDE_DIR="$GITHUB_WORKSPACE/vpnhide"
         KSU_DIR="$KERNEL_PLATFORM_DIR/KernelSU"
         mkdir -p "$ARTIFACTS_DIR"
         mkdir -p "$DEBUG_ARTIFACTS_DIR"
@@ -354,6 +361,7 @@ runs:
         echo "DEBUG_ARTIFACTS_FOLDER=$DEBUG_ARTIFACTS_DIR" >> "$GITHUB_ENV"
         echo "KERNEL_PATCHES_FOLDER=$KERNEL_PATCHES_DIR" >> "$GITHUB_ENV"
         echo "SUSFS_FOLDER=$SUSFS_DIR" >> "$GITHUB_ENV"
+        echo "VPNHIDE_FOLDER=$VPNHIDE_DIR" >> "$GITHUB_ENV"
         echo "KSU_FOLDER=$KSU_DIR" >> "$GITHUB_ENV"
         echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
         echo "CCACHE_LOGFILE=$GITHUB_WORKSPACE/ccache.log" >> "$GITHUB_ENV"
@@ -1706,6 +1714,34 @@ runs:
           patch -p1 < "$KERNEL_PATCHES_FOLDER/common/vendor_modules/0001-Support-conditional-vendor-modules-blacklisting-6.1-and-above.patch"
         fi
         
+    - name: Integrate VPNHide built-in backend
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "::group::Integrate VPNHide built-in backend"
+        rm -rf "$VPNHIDE_FOLDER"
+        git clone --no-checkout "https://github.com/${{ inputs.vpnhide_repo }}.git" "$VPNHIDE_FOLDER"
+        git -C "$VPNHIDE_FOLDER" fetch --depth=1 origin "${{ inputs.vpnhide_commit }}"
+        git -C "$VPNHIDE_FOLDER" checkout --detach FETCH_HEAD
+        test "$(git -C "$VPNHIDE_FOLDER" rev-parse HEAD)" = "${{ inputs.vpnhide_commit }}"
+        mkdir -p "$GITHUB_WORKSPACE/source-snapshot"
+        python3 "$VPNHIDE_FOLDER/builtin/scripts/integrate.py" apply \
+          --kernel "$COMMON_KERNEL_FOLDER" \
+          --kmi "${ANDROID_VER}-${KERNEL_VER}" \
+          --output "$GITHUB_WORKSPACE/source-snapshot/vpnhide-integration"
+        jq -e --arg sha "${{ inputs.vpnhide_commit }}" '
+          .status == "applied" and .vpnhide_revision == $sha and
+          .checks.patch_round_trip == "passed" and
+          ([.edits[].status] | all(. == "matched"))
+        ' "$GITHUB_WORKSPACE/source-snapshot/vpnhide-integration/report.json"
+        cat >> "$COMMON_KERNEL_FOLDER/arch/arm64/configs/gki_defconfig" <<EOF
+        CONFIG_VPNHIDE=y
+        CONFIG_VPNHIDE_FS_HIDING=y
+        EOF
+        echo "VPNHIDE_COMMIT_SHA=${{ inputs.vpnhide_commit }}" >> "$GITHUB_ENV"
+        echo "VPNHide built-in backend integrated"
+        echo "::endgroup::"
+
     - name: Build Kernel
       id: build_kernel_step
       shell: bash
