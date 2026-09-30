@@ -3,6 +3,11 @@ name: Build NetHunter Takeover
 on:
   workflow_dispatch:
     inputs:
+      publish_release:
+        description: Create a GitHub release after build jobs pass
+        required: true
+        type: boolean
+        default: false
       optimize_level:
         description: Compiler optimization level
         required: true
@@ -252,3 +257,72 @@ jobs:
             dist/provenance-*.json
           retention-days: 90
           if-no-files-found: warn
+
+  release:
+    name: Publish release
+    needs: [resolve, build, nethunter-takeover]
+    if: ${{ inputs.publish_release && needs.build.result == 'success' && needs.nethunter-takeover.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: release-assets
+          merge-multiple: true
+          skip-decompress: true
+
+      - name: Prepare release notes
+        env:
+          SOURCES: ${{ needs.resolve.outputs.sources }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mapfile -t kernel_zips < <(find release-assets -maxdepth 1 -type f -name 'AK3_*.zip' | sort)
+          [[ "${#kernel_zips[@]}" -gt 0 ]] || { echo 'No kernel ZIP assets found' >&2; find release-assets -maxdepth 1 -type f || true; exit 1; }
+          mapfile -t takeover_zips < <(find release-assets -maxdepth 1 -type f -name 'nethunter-takeover-*.zip' | sort)
+          sha256sum release-assets/*.zip | sort -k2 > release-assets/00_CHECKSUMS.txt
+          jq . <<< "$SOURCES" > release-assets/resolved-sources.json
+
+          wild_release=$(jq -r '.wild_release' <<< "$SOURCES")
+          release_tag="nethunter-${wild_release}"
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            release_tag="${release_tag}-r${GITHUB_RUN_NUMBER}"
+          fi
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
+
+          {
+            echo "# NetHunter Takeover build"
+            echo
+            echo "## Included assets"
+            echo
+            for file in "${kernel_zips[@]}"; do
+              name=$(basename "$file")
+              echo "- \`$name\`"
+            done
+            for file in "${takeover_zips[@]}"; do
+              name=$(basename "$file")
+              echo "- \`$name\`"
+            done
+            echo "- \`resolved-sources.json\`"
+            echo "- \`00_CHECKSUMS.txt\`"
+            echo
+            echo "## Build configuration"
+            echo
+            printf -- '- Optimization: `%s`\n' '${{ inputs.optimize_level }}'
+            printf -- '- Clean build: `%s`\n' '${{ inputs.clean_build }}'
+            printf -- '- Debug artifacts: `%s`\n' '${{ inputs.debug }}'
+            echo
+            echo "Build run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > release-assets/00_RELEASE_NOTES.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "NetHunter Takeover (${RELEASE_TAG})" \
+            --notes-file release-assets/00_RELEASE_NOTES.md
