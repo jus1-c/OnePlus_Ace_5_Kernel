@@ -251,7 +251,7 @@ jobs:
           set -euo pipefail
           url=$(jq -r '.nomount_asset_url' <<< "$SOURCES")
           digest=$(jq -r '.nomount_asset_sha256' <<< "$SOURCES")
-          name="NoMount-$(jq -r '.nomount_tag' <<< "$SOURCES")-release.zip"
+          name=$(jq -r '.nomount_asset_name' <<< "$SOURCES")
           curl --fail --location --silent --show-error "$url" -o "$name"
           printf '%s  %s\n' "$digest" "$name" | sha256sum -c -
 
@@ -259,7 +259,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nomount-module
-          path: NoMount-*-release.zip
+          path: NoMount-*.zip
           archive: false
           compression-level: 0
           if-no-files-found: error
@@ -314,7 +314,7 @@ jobs:
           nomount_sha=$(jq -r '.nomount_sha' <<< "$SOURCES")
           nomount_short_sha="${nomount_sha:0:12}"
           nomount_asset=$(basename "${nomount_zips[0]}")
-          [[ "$nomount_asset" == "NoMount-${nomount_tag}-release.zip" ]] || {
+          [[ "$nomount_asset" == "$(jq -r '.nomount_asset_name' <<< "$SOURCES")" ]] || {
             echo "NoMount asset has unexpected name: $nomount_asset" >&2
             exit 1
           }
