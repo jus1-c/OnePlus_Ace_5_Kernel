@@ -56,11 +56,14 @@ if ! jq -e '.draft == false and .prerelease == false' <<< "$nomount_release" >/d
 fi
 nomount_sha=$(resolve_ref "$nomount_repo" "$nomount_tag")
 [[ "$nomount_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Cannot resolve NoMount tag $nomount_tag" >&2; exit 1; }
-nomount_asset=$(jq -er --arg name "NoMount-${nomount_tag}-release.zip" '
-  [.assets[] | select(.name == $name)] as $matches |
-  if ($matches | length) != 1 then error("expected one NoMount asset: " + $name)
+# Upstream renames the asset across releases (e.g. NoMount-v2.1.0-release-500.zip),
+# so match the NoMount-*.zip pattern and record the exact name instead of a
+# hardcoded release suffix.
+nomount_asset=$(jq -er '
+  [.assets[] | select(.name | test("^NoMount-.*\\.zip$"))] as $matches |
+  if ($matches | length) != 1 then error("expected exactly one NoMount-*.zip asset, found \($matches | length)")
   elif (($matches[0].digest // "") | test("^sha256:[0-9a-f]{64}$") | not) then error("NoMount asset lacks SHA-256 digest")
-  else {url:$matches[0].browser_download_url,sha256:($matches[0].digest | sub("^sha256:"; ""))}
+  else {name:$matches[0].name,url:$matches[0].browser_download_url,sha256:($matches[0].digest | sub("^sha256:"; ""))}
   end
 ' <<< "$nomount_release")
 
@@ -116,6 +119,7 @@ manifests=$(api "https://api.github.com/repos/${repo}/git/trees/${wild_sha}?recu
   --arg nomount_repo "$nomount_repo" \
    --arg nomount_tag "$nomount_tag" \
    --arg nomount_sha "$nomount_sha" \
+   --arg nomount_asset_name "$(jq -r '.name' <<< "$nomount_asset")" \
    --arg nomount_asset_url "$(jq -r '.url' <<< "$nomount_asset")" \
    --arg nomount_asset_sha256 "$(jq -r '.sha256' <<< "$nomount_asset")" \
   --arg kernel_patches_repo "$kernel_patches_repo" \
@@ -136,7 +140,7 @@ manifests=$(api "https://api.github.com/repos/${repo}/git/trees/${wild_sha}?recu
   '{wild_repo:$wild_repo,wild_release:$wild_tag,wild_sha:$wild_sha,wild_published_at:$wild_published_at,susfs_sha:$susfs_sha,
     bakasu_repo:$bakasu_repo,bakasu_sha:$bakasu_sha,
       nomount_repo:$nomount_repo,nomount_tag:$nomount_tag,nomount_sha:$nomount_sha,
-      nomount_asset_url:$nomount_asset_url,nomount_asset_sha256:$nomount_asset_sha256,
+      nomount_asset_name:$nomount_asset_name,nomount_asset_url:$nomount_asset_url,nomount_asset_sha256:$nomount_asset_sha256,
      kernel_patches_repo:$kernel_patches_repo,kernel_patches_sha:$kernel_patches_sha,
      vpnhide_repo:$vpnhide_repo,vpnhide_tag:$vpnhide_tag,vpnhide_sha:$vpnhide_sha,
      vpnhide_builtin_url:$vpnhide_builtin_url,vpnhide_builtin_sha256:$vpnhide_builtin_sha256,
