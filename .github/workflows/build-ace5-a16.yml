@@ -28,7 +28,7 @@ on:
         description: Mark release as pre-release
         required: true
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -41,12 +41,12 @@ env:
 
 jobs:
   resolve:
-    name: Resolve and audit immutable sources
+    name: Resolve immutable sources
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.sources.outputs.matrix }}
       sources: ${{ steps.sources.outputs.sources }}
-      wild_release: ${{ steps.sources.outputs.wild_release }}
+      kernel_version: ${{ steps.sources.outputs.kernel_version }}
     steps:
       - name: Checkout fork scripts
         id: checkout
@@ -57,7 +57,7 @@ jobs:
       - name: Install resolver dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends jq curl git libxml2-utils
 
-      - name: Resolve sources and Ace 5 matrix
+      - name: Resolve sources and giuliac matrix
         id: sources
         env:
           GH_TOKEN: ${{ github.token }}
@@ -65,107 +65,51 @@ jobs:
         run: |
           set -euo pipefail
           sources=$(bash scripts/resolve_sources.sh)
-          wild_repo=$(jq -r '.wild_repo' <<< "$sources")
-          wild_sha=$(jq -r '.wild_sha' <<< "$sources")
-          mapfile -t configs < <(jq -r '.configs[]' <<< "$sources")
-          matrix='[]'
-          for config_path in "${configs[@]}"; do
-            config=$(curl --fail --location --silent --show-error \
-              "https://raw.githubusercontent.com/${wild_repo}/${wild_sha}/${config_path}")
-            manifest=$(jq -r '.manifest' <<< "$config")
-            manifest_url="https://raw.githubusercontent.com/${wild_repo}/${wild_sha}/manifests/a16/${manifest}"
-            entry=$(jq -c --arg manifest_url "$manifest_url" '. + {manifest:$manifest_url, ksu_type:"BakaSU", uname:"OP-ACE5-BAKASU", blacklist_modules:""}' <<< "$config")
-            matrix=$(jq -c --argjson entry "$entry" '. + [$entry]' <<< "$matrix")
-          done
-          [[ $(jq 'length' <<< "$matrix") -gt 0 ]] || { echo 'Empty Ace 5 matrix' >&2; exit 1; }
           printf '%s\n' "$sources" > resolved-sources.json
-          printf '%s\n' "$matrix" > ace5-matrix.json
-          matrix_json=$(jq -cn --argjson include "$matrix" '{include:$include}')
+
+          kernel_branch=$(jq -r '.kernel_branch' <<< "$sources")
+          kernel_sha=$(jq -r '.kernel_sha' <<< "$sources")
+          kernel_repo=$(jq -r '.kernel_repo' <<< "$sources")
+          kernel_path=$(jq -r '.kernel_path' <<< "$sources")
+
+          # Derive the kernel version from the resolved kernel Makefile, never
+          # hardcode it. The branch is currently 6.1.176 but must not be pinned.
+          makefile=$(curl --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/${kernel_repo}/${kernel_sha}/Makefile")
+          VERSION=$(awk '/^VERSION *=/{print $3}' <<< "$makefile")
+          PATCHLEVEL=$(awk '/^PATCHLEVEL *=/{print $3}' <<< "$makefile")
+          SUBLEVEL=$(awk '/^SUBLEVEL *=/{print $3}' <<< "$makefile")
+          [[ -n "$VERSION" && -n "$PATCHLEVEL" && -n "$SUBLEVEL" ]] || { echo 'Cannot derive kernel version from resolved Makefile' >&2; exit 1; }
+          kernel_version="${VERSION}.${PATCHLEVEL}"
+          kernel_full="${VERSION}.${PATCHLEVEL}.${SUBLEVEL}"
+          echo "Resolved kernel: ${kernel_full} (${kernel_sha:0:8})"
+
+          entry=$(jq -c --arg full "$kernel_full" '
+            . + {model:"OP-ACE-5", uname:"OP-ACE5-BAKASU", ksu_type:"BakaSU"}
+          ' configs/a16/OP-ACE-5.json)
+          entry=$(jq -c --arg full "$kernel_full" '.kernel_version=$full | .kernel_version=(($full|split("."))[0:2]|join("."))' <<< "$entry")
+          matrix=$(jq -cn --argjson e "$entry" '{include:[$e]}')
+
           {
             echo "sources<<EOF"
             echo "$sources"
             echo EOF
             echo "matrix<<EOF"
-            echo "$matrix_json"
+            echo "$matrix"
             echo EOF
-            echo "wild_release=$(jq -r '.wild_release' <<< "$sources")"
+            echo "kernel_version=${kernel_full}"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Audit WildKernel stability contract
-        id: wild_audit
-        if: ${{ always() }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WILD_REPO: WildKernels/OnePlus_KernelSU_SUSFS
-          WILD_TAG: ${{ steps.sources.outputs.wild_release }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p source-snapshot
-          [[ ! -f resolved-sources.json ]] || cp resolved-sources.json source-snapshot/resolved-sources.json
-          [[ ! -f ace5-matrix.json ]] || cp ace5-matrix.json source-snapshot/ace5-matrix.json
-          set +e
-          if [[ -n "$WILD_TAG" ]]; then
-            bash scripts/audit_wild_release.sh --tag "$WILD_TAG" --output source-snapshot/wild-audit.json
-          fi
-          set -e
-          if [[ ! -s source-snapshot/wild-audit.json ]]; then
-            cat > source-snapshot/wild-audit.json <<EOF
-          {
-            "status": "fail",
-            "repository": "${WILD_REPO}",
-            "candidate": {"tag":"${WILD_TAG}"},
-            "baseline": {},
-            "compare": {"url":"","status":"","files":[],"commits":[]},
-            "control_plane": {"candidate":{},"baseline":{},"changes":[]},
-            "ace5": {"configs":[],"manifests":[],"path_changes":{},"config_schema":[],"schema_errors":[],"contract_errors":[],"manifest_errors":[]},
-            "reasons": ["Source resolution failed before WildKernel audit could run"],
-            "run_url": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          }
-          EOF
-          fi
-          if [[ -s source-snapshot/resolved-sources.json ]]; then
-            jq --slurpfile sources source-snapshot/resolved-sources.json '
-              .source_snapshot = {
-                wild_sha: $sources[0].wild_sha,
-                susfs_sha: $sources[0].susfs_sha,
-                kernel_patches_sha: $sources[0].kernel_patches_sha
-              }
-            ' source-snapshot/wild-audit.json > source-snapshot/wild-audit.tmp
-            mv source-snapshot/wild-audit.tmp source-snapshot/wild-audit.json
-            # SUSFS now sourced from upstream GitLab, not WildKernels — skip SUSFS SHA comparison
-            if ! jq -e '
-              .candidate.commit == .source_snapshot.wild_sha and
-              .candidate.kernel_patches_commit == .source_snapshot.kernel_patches_sha
-            ' source-snapshot/wild-audit.json >/dev/null; then
-              jq --arg reason 'Resolved source snapshot differs from audited WildKernel snapshot (wild_sha or kernel_patches mismatch)' \
-                '.status = "fail" | .reasons += [$reason]' source-snapshot/wild-audit.json > source-snapshot/wild-audit.tmp
-              mv source-snapshot/wild-audit.tmp source-snapshot/wild-audit.json
-            fi
-          fi
-          jq -r '
-            "# WildKernel Audit\n",
-            "- Status: **\(.status)**",
-            "- Candidate: `\(.candidate.tag // "unknown")` (`\(.candidate.commit // "unknown")`)\n",
-            "## Reasons",
-            (.reasons[]? | "- \(.)"),
-            "\n## Control-plane changes",
-            (.control_plane.changes[]? | "- \(.path): `\(.baseline)` -> `\(.candidate)`"),
-            "\n## Compare",
-            "- Status: `\(.compare.status // "unknown")`",
-            "- URL: \(.compare.url // "")"
-          ' source-snapshot/wild-audit.json > source-snapshot/wild-audit.md
 
       - name: Upload source snapshot
         if: ${{ always() && steps.checkout.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: resolved-sources
-          path: source-snapshot
+          path: resolved-sources.json
           if-no-files-found: error
           retention-days: 90
 
-      - name: Enforce WildKernel stability contract
+      - name: Enforce source resolution
         if: ${{ always() }}
         env:
           RESOLVE_OUTCOME: ${{ steps.sources.outcome }}
@@ -173,10 +117,6 @@ jobs:
           set -euo pipefail
           [[ "$RESOLVE_OUTCOME" == success ]] || {
             echo 'Source resolution failed; refusing to start kernel builds.' >&2
-            exit 1
-          }
-          jq -e '.status == "pass"' source-snapshot/wild-audit.json >/dev/null || {
-            echo 'WildKernel stability audit failed; refusing to start kernel builds.' >&2
             exit 1
           }
 
@@ -201,17 +141,41 @@ jobs:
             libncurses-dev zlib1g-dev liblz4-tool libxml2-utils rsync unzip dwarves file \
             python3 ccache jq bc dos2unix kmod libdw-dev elfutils pigz aria2 zip
 
-      - name: Read resolved source snapshot
+      - name: Stage resolved source snapshot
+        env:
+          SOURCES: ${{ needs.resolve.outputs.sources }}
         run: |
           set -euo pipefail
           mkdir -p source-snapshot
-          echo '${{ needs.resolve.outputs.sources }}' > source-snapshot/resolved-sources.json
-          jq -e '.wild_sha and .susfs_sha and .bakasu_sha and .nomount_sha and .vpnhide_sha and .vpnhide_builtin_sha256 and .vpnhide_apk_sha256' source-snapshot/resolved-sources.json >/dev/null
+          printf '%s\n' "$SOURCES" > source-snapshot/resolved-sources.json
+          jq -e '.kernel_sha and .kernel_modules_sha and .kernel_devicetrees_sha and .gki_sha and .susfs_sha and .bakasu_sha and .nomount_sha and .vpnhide_sha and .droidspaces_sha and .kernel_patches_sha and .anykernel3_sha and .vpnhide_builtin_sha256 and .vpnhide_apk_sha256' source-snapshot/resolved-sources.json >/dev/null
 
-      - name: Build kernel with BakaSU, SUSFS, and NoMount
+      - name: Fetch clang toolchain
+        env:
+          SOURCES: ${{ needs.resolve.outputs.sources }}
+        run: |
+          set -euo pipefail
+          # The Lunaris tree is built with clang-r563880c (see
+          # aosp-for-giulia/scripts_kernel_oneplus_sm8650/build.sh), which the
+          # action loads from $CONFIG_FOLDER/toolchain/clang/bin.
+          mkdir -p "$GITHUB_WORKSPACE/OP-ACE-5/toolchain"
+          git clone --depth=1 https://github.com/realahnet/clang-r563880c.git "$GITHUB_WORKSPACE/OP-ACE-5/toolchain/clang"
+          test -x "$GITHUB_WORKSPACE/OP-ACE-5/toolchain/clang/bin/clang"
+
+      - name: Build kernel (Lunaris giuliac + GKI features)
         uses: ./.github/actions/build-kernel
         with:
           op_config_json: ${{ toJSON(matrix) }}
+          kernel_repo: ${{ fromJSON(needs.resolve.outputs.sources).kernel_repo }}
+          kernel_branch: ${{ fromJSON(needs.resolve.outputs.sources).kernel_branch }}
+          kernel_commit: ${{ fromJSON(needs.resolve.outputs.sources).kernel_sha }}
+          kernel_modules_repo: ${{ fromJSON(needs.resolve.outputs.sources).kernel_modules_repo }}
+          kernel_modules_commit: ${{ fromJSON(needs.resolve.outputs.sources).kernel_modules_sha }}
+          kernel_devicetrees_repo: ${{ fromJSON(needs.resolve.outputs.sources).kernel_devicetrees_repo }}
+          kernel_devicetrees_commit: ${{ fromJSON(needs.resolve.outputs.sources).kernel_devicetrees_sha }}
+          anykernel3_repo: ${{ fromJSON(needs.resolve.outputs.sources).anykernel3_repo }}
+          anykernel3_commit: ${{ fromJSON(needs.resolve.outputs.sources).anykernel3_sha }}
+          gki_commit: ${{ fromJSON(needs.resolve.outputs.sources).gki_sha }}
           ksu_type: BakaSU
           ksu_branch_or_hash: ${{ fromJSON(needs.resolve.outputs.sources).bakasu_sha }}
           susfs_commit_hash_or_branch: ${{ fromJSON(needs.resolve.outputs.sources).susfs_sha }}
@@ -222,6 +186,7 @@ jobs:
           kernel_patches_commit: ${{ fromJSON(needs.resolve.outputs.sources).kernel_patches_sha }}
           vpnhide_repo: ${{ fromJSON(needs.resolve.outputs.sources).vpnhide_repo }}
           vpnhide_commit: ${{ fromJSON(needs.resolve.outputs.sources).vpnhide_sha }}
+          droidspaces_commit: ${{ fromJSON(needs.resolve.outputs.sources).droidspaces_sha }}
           optimize_level: ${{ inputs.optimize_level }}
           clean: ${{ inputs.clean_build }}
           debug: ${{ inputs.debug }}
@@ -285,112 +250,91 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCES: ${{ needs.resolve.outputs.sources }}
+          KERNEL_VERSION: ${{ needs.resolve.outputs.kernel_version }}
         run: |
           set -euo pipefail
           shopt -s nullglob
           mapfile -t kernel_zips < <(find release-assets -maxdepth 1 -type f -name 'AK3_*.zip' | sort)
           mapfile -t nomount_zips < <(find release-assets -maxdepth 1 -type f -name 'NoMount-*.zip' | sort)
-          [[ "${#kernel_zips[@]}" -eq 2 ]] || { echo 'Expected exactly two kernel ZIPs' >&2; find release-assets -maxdepth 1 -type f || true; exit 1; }
+          [[ "${#kernel_zips[@]}" -eq 1 ]] || { echo 'Expected exactly one kernel ZIP' >&2; find release-assets -maxdepth 1 -type f || true; exit 1; }
           [[ "${#nomount_zips[@]}" -eq 1 ]] || { echo 'Expected exactly one NoMount ZIP' >&2; find release-assets -maxdepth 1 -type f || true; exit 1; }
 
           vpnhide_builtin_url=$(jq -r '.vpnhide_builtin_url' <<< "$SOURCES")
           vpnhide_apk_url=$(jq -r '.vpnhide_apk_url' <<< "$SOURCES")
-          curl --fail --location --silent --show-error \
-            "$vpnhide_builtin_url" \
-            -o release-assets/vpnhide-builtin.zip
-          curl --fail --location --silent --show-error \
-            "$vpnhide_apk_url" \
-            -o release-assets/vpnhide.apk
-          printf '%s  %s\n' \
-            "$(jq -r '.vpnhide_builtin_sha256' <<< "$SOURCES")" \
-            release-assets/vpnhide-builtin.zip | sha256sum -c -
-          printf '%s  %s\n' \
-            "$(jq -r '.vpnhide_apk_sha256' <<< "$SOURCES")" \
-            release-assets/vpnhide.apk | sha256sum -c -
+          curl --fail --location --silent --show-error "$vpnhide_builtin_url" -o release-assets/vpnhide-builtin.zip
+          curl --fail --location --silent --show-error "$vpnhide_apk_url" -o release-assets/vpnhide.apk
+          printf '%s  %s\n' "$(jq -r '.vpnhide_builtin_sha256' <<< "$SOURCES")" release-assets/vpnhide-builtin.zip | sha256sum -c -
+          printf '%s  %s\n' "$(jq -r '.vpnhide_apk_sha256' <<< "$SOURCES")" release-assets/vpnhide.apk | sha256sum -c -
 
-          wild_release=$(jq -r '.wild_release' <<< "$SOURCES")
-          wild_sha=$(jq -r '.wild_sha' <<< "$SOURCES")
           nomount_tag=$(jq -r '.nomount_tag' <<< "$SOURCES")
-          nomount_sha=$(jq -r '.nomount_sha' <<< "$SOURCES")
-          nomount_short_sha="${nomount_sha:0:12}"
           nomount_asset=$(basename "${nomount_zips[0]}")
-          [[ "$nomount_asset" == "$(jq -r '.nomount_asset_name' <<< "$SOURCES")" ]] || {
-            echo "NoMount asset has unexpected name: $nomount_asset" >&2
-            exit 1
-          }
-          nomount_version="$nomount_tag"
+          [[ "$nomount_asset" == "$(jq -r '.nomount_asset_name' <<< "$SOURCES")" ]] || { echo "NoMount asset has unexpected name: $nomount_asset" >&2; exit 1; }
 
           find release-assets -maxdepth 1 -type f ! -name 'AK3_*.zip' ! -name "$nomount_asset" ! -name 'vpnhide-builtin.zip' ! -name 'vpnhide.apk' -delete
           jq . <<< "$SOURCES" > release-assets/resolved-sources.json
           sha256sum release-assets/*.zip | sort -k2 > release-assets/00_CHECKSUMS.txt
 
-          vpnhide_tag=$(jq -r '.vpnhide_tag' <<< "$SOURCES")
-          release_tag="ace5-${wild_release}-nm-${nomount_tag}-vpnhide-${vpnhide_tag}"
+          release_tag="giuliac-${KERNEL_VERSION}-nm-${nomount_tag}"
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             release_tag="${release_tag}-r${GITHUB_RUN_NUMBER}"
           fi
           echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
           echo "NOMOUNT_ASSET=$nomount_asset" >> "$GITHUB_ENV"
-          echo "NOMOUNT_VERSION=$nomount_version" >> "$GITHUB_ENV"
 
           {
-            echo "# OnePlus Ace 5 Kernel 📦 NoMount (${nomount_version})"
+            echo "# OnePlus Ace 5 (giuliac) Kernel — ${KERNEL_VERSION} 📦 NoMount (${nomount_tag})"
             echo
-            echo "**A custom OnePlus Ace 5 kernel plus a mountless NoMount add-on.**"
+            echo "**A custom kernel for OnePlus Ace 5 (giuliac) built from the Lunaris tree, plus a mountless NoMount add-on. Your device keeps its stock vendor modules; only the kernel Image is replaced.**"
             echo
-            echo "## This release contains two downloads"
+            echo "## Downloads"
             echo
-            echo '1. **Kernel** — flash the matching `AK3_...zip` with Kernel Flasher or KernelSU Manager.'
+            echo "1. **Kernel** — flash the matching \`AK3_...zip\` with Kernel Flasher or KernelSU Manager."
             printf '2. **NoMount module** — install `%s` from KernelSU Manager Modules after rebooting into the kernel.\n' "$nomount_asset"
             echo
-            echo "> NoMount is compiled into kernel but remains dormant until module activates it. Install both."
+            echo "> NoMount is compiled into the kernel but stays dormant until the module activates it. Install both."
             echo
-            echo "## Kernel downloads"
+            echo "## Assets"
             echo
             echo "| Asset | SHA256 |"
             echo "|---|---|"
             for file in release-assets/AK3_*.zip; do
-              name=$(basename "$file")
-              sha=$(sha256sum "$file" | awk '{print $1}')
-              printf '| `%s` | `%s` |\n' "$name" "$sha"
+              printf '| `%s` | `%s` |\n' "$(basename "$file")" "$(sha256sum "$file" | awk '{print $1}')"
             done
-            sha=$(sha256sum "release-assets/${nomount_asset}" | awk '{print $1}')
-            printf '| `%s` | `%s` |\n' "$nomount_asset" "$sha"
+            printf '| `%s` | `%s` |\n' "$nomount_asset" "$(sha256sum "release-assets/${nomount_asset}" | awk '{print $1}')"
             for file in release-assets/vpnhide-builtin.zip release-assets/vpnhide.apk; do
-              name=$(basename "$file")
-              sha=$(sha256sum "$file" | awk '{print $1}')
-              printf '| `%s` | `%s` |\n' "$name" "$sha"
+              printf '| `%s` | `%s` |\n' "$(basename "$file")" "$(sha256sum "$file" | awk '{print $1}')"
             done
             echo
             echo "## Build configuration"
             echo
             echo "| Component | Value |"
             echo "|---|---|"
-            printf '| WildKernel release | `%s` |\n' "$wild_release"
-            printf '| WildKernel commit | `%s` |\n' "$wild_sha"
+            printf '| Kernel repo | `%s` |\n' "$(jq -r '.kernel_repo' <<< "$SOURCES")"
+            printf '| Kernel branch | `%s` |\n' "$(jq -r '.kernel_branch' <<< "$SOURCES")"
+            printf '| Kernel commit | `%s` |\n' "$(jq -r '.kernel_sha' <<< "$SOURCES")"
+            printf '| Kernel version | `%s` |\n' "$KERNEL_VERSION"
+            printf '| GKI reference | `%s@%s` (`%s`) |\n' "$(jq -r '.gki_repo' <<< "$SOURCES")" "$(jq -r '.gki_branch' <<< "$SOURCES")" "$(jq -r '.gki_sha' <<< "$SOURCES")"
             printf '| NoMount release | `%s` |\n' "$nomount_tag"
-            printf '| NoMount commit | `%s` |\n' "$nomount_sha"
             echo "| Root | BakaSU |"
             printf '| Optimization | `%s` |\n' '${{ inputs.optimize_level }}'
             printf '| Clean build | `%s` |\n' '${{ inputs.clean_build }}'
             echo
-             echo "## VPNHide"
-             echo
-             echo "VPNHide built-in backend is compiled into both kernels with CONFIG_VPNHIDE=y and CONFIG_VPNHIDE_FS_HIDING=y."
-             echo
-             echo '1. Install `vpnhide-builtin.zip` as a KernelSU/Magisk module.'
-             echo '2. Install `vpnhide.apk`.'
-             echo '3. Enable VPN Hide in LSPosed with `System Framework` in scope.'
-             echo '4. Reboot, then configure target apps in VPN Hide.'
-             echo '5. Do not install VPNHide kmod, KPM, or Zygisk together with the built-in backend.'
-             echo
-             echo "## Installation"
+            echo "## VPNHide"
             echo
-            echo "1. Select ZIP matching exact device and kernel version."
-            echo "2. Keep stock boot image for rollback."
-            echo "3. Flash kernel ZIP with Kernel Flasher."
-            echo "4. Boot and install NoMount module from KernelSU Manager."
-            echo "5. Reboot again."
+            echo "VPNHide built-in backend is compiled into the kernel with CONFIG_VPNHIDE=y and CONFIG_VPNHIDE_FS_HIDING=y."
+            echo
+            echo '1. Install `vpnhide-builtin.zip` as a KernelSU/Magisk module.'
+            echo '2. Install `vpnhide.apk`.'
+            echo '3. Enable VPN Hide in LSPosed with `System Framework` in scope.'
+            echo '4. Reboot, then configure target apps in VPN Hide.'
+            echo '5. Do not install VPNHide kmod, KPM, or Zygisk together with the built-in backend.'
+            echo
+            echo "## Installation"
+            echo
+            echo "1. Flash the kernel ZIP with Kernel Flasher."
+            echo "2. Keep a stock boot image for rollback."
+            echo "3. Boot and install the NoMount module from KernelSU Manager."
+            echo "4. Reboot again."
             echo
             echo "## Features"
             echo
@@ -423,27 +367,24 @@ jobs:
           SOURCES: ${{ needs.resolve.outputs.sources }}
         run: |
           set -euo pipefail
-          nomount_sha=$(jq -r '.nomount_sha' <<< "$SOURCES")
-          nomount_short_sha="${nomount_sha:0:12}"
           nomount_tag=$(jq -r '.nomount_tag' <<< "$SOURCES")
           nomount_asset=$(basename "$(find release-assets -maxdepth 1 -type f -name 'NoMount-*.zip' | head -1)")
           zip_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${nomount_asset}"
           cat > release-assets/update.json <<EOF
           {
-            "version": "${NOMOUNT_VERSION}",
+            "version": "${nomount_tag}",
             "versionCode": ${GITHUB_RUN_ID},
             "zipUrl": "${zip_url}",
             "changelog": "Official NoMount release ${nomount_tag}\nRun: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           }
           EOF
-          echo "Generated update.json:"
           cat release-assets/update.json
 
-      - name: Create prerelease
+      - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RELEASE_ARGS=("$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --title "OnePlus Ace 5 Kernel 📦 NoMount (${NOMOUNT_VERSION})" --notes-file release-assets/00_DOWNLOADS.md)
+          RELEASE_ARGS=("$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --title "OnePlus Ace 5 (giuliac) Kernel (${RELEASE_TAG})" --notes-file release-assets/00_DOWNLOADS.md)
           if [[ "${{ inputs.prerelease }}" == "true" ]]; then
             RELEASE_ARGS+=(--prerelease)
           fi
