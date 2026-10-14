@@ -646,6 +646,16 @@ runs:
 
         OUT=out
         mkdir -p "$OUT"
+
+        # certs/extract-cert.c declares key_pass only under USE_PKCS11_ENGINE,
+        # but uses it under #ifndef OPENSSL_IS_BORINGSSL. With host OpenSSL 3
+        # (no pkcs11 engine) USE_PKCS11_ENGINE is undefined, so the host tool
+        # fails to compile. Make the declaration unconditional; key_pass is
+        # only read when a pkcs11: cert source is used, which this build never
+        # does.
+        perl -0pi -e 's/#ifdef USE_PKCS11_ENGINE\n(static const char \*key_pass;\n)#endif\n/$1/' certs/extract-cert.c
+        grep -q '^static const char \*key_pass;$' certs/extract-cert.c || { echo "::error::extract-cert.c key_pass fix did not apply"; exit 1; }
+
         make O="$OUT" gki_defconfig vendor/pineapple_GKI.config vendor/oplus/pineapple_GKI.config
 
         LOCAL_LOCALVERSION="-${OP_ANDROID_VERSION}-${OP_UNAME}"
