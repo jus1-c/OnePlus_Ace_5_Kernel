@@ -701,8 +701,12 @@ runs:
         cp "$OUT/.config" "$DEBUG_ARTIFACTS_FOLDER/${OP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}.config"
 
         BUILD_START=$(date +%s)
-        make -j"$(nproc --all)" O="$OUT" KCFLAGS="-Wno-error -pipe ${KCFLAGS_EXTRA}" Image 2>&1 | tee build.log
-        make -j"$(nproc --all)" O="$OUT" dtbs 2>&1 | tee -a build.log || echo "::warning::dtbs target reported a problem; continuing (Image is the deliverable)"
+        # HOSTCFLAGS: clang-r563880c is stricter than the clang the tree
+        # expects and trips -Werror on the host-side resolve_btfids/libbpf.c
+        # (strchr const-qualifier discard). Suppress that class for host tools.
+        HOSTFLAGS="-Wno-error -Wno-incompatible-pointer-types-discards-qualifiers"
+        make -j"$(nproc --all)" O="$OUT" HOSTCFLAGS="$HOSTFLAGS" KCFLAGS="-Wno-error -pipe ${KCFLAGS_EXTRA}" Image 2>&1 | tee build.log
+        make -j"$(nproc --all)" O="$OUT" HOSTCFLAGS="$HOSTFLAGS" dtbs 2>&1 | tee -a build.log || echo "::warning::dtbs target reported a problem; continuing (Image is the deliverable)"
         BUILD_END=$(date +%s)
         echo "BUILD_TIME=$((BUILD_END - BUILD_START))" >> "$GITHUB_ENV"
 
