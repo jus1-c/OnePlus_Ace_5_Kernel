@@ -305,6 +305,18 @@ runs:
         git submodule update --init --recursive
         KSU_VERSION=$((30700 + $(git rev-list --count HEAD)))
         cd ..
+
+        # BakaSU's kernel/tools/susfs_compat.mk ends with an unconditional
+        # $(error "Please wait susfs update.") that fires on every
+        # CONFIG_KSU_SUSFS=y build. The grep-based KSU_COMPAT_HAS_* shims above
+        # that gate are what adapt the code to the SUSFS layout, so keep them
+        # and strip only the hard stop. Mirrors the GKI root-setup action.
+        SUSFS_COMPAT="KernelSU/kernel/tools/susfs_compat.mk"
+        if [ -f "$SUSFS_COMPAT" ] && grep -q 'Please wait susfs update' "$SUSFS_COMPAT"; then
+          sed -i '/susfs has NOT update with latest KernelSU source/,$d' "$SUSFS_COMPAT"
+          echo "Stripped susfs_compat hard stop from $SUSFS_COMPAT"
+        fi
+
         KSU_COMMIT_SHA=$(git -C KernelSU rev-parse HEAD)
         echo "KSU_COMMIT_SHA=$KSU_COMMIT_SHA" >> "$GITHUB_ENV"
         echo "NEED_HOOKS=false" >> "$GITHUB_ENV"
@@ -364,13 +376,18 @@ runs:
         patch_file="$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_${SUSFS_BRANCH}.patch"
         [ -f "$patch_file" ] || { echo "::error::SUSFS patch not found: $patch_file"; exit 1; }
 
-        # Tree-specific fake patch, mirroring the GKI susfs-patches action: on
-        # android14-6.1 sublevel >= 157 the tree carries an extra
-        # `#include <trace/hooks/blk.h>` in fs/namespace.c that shifts the hunk
-        # #1 context. Drop it so the patch applies; SUSFS does not use it.
+        # Tree-specific fake patch: on android14-6.1 sublevel >= 157 the tree
+        # carries an extra `#include <trace/hooks/blk.h>` in fs/namespace.c
+        # that shifts the SUSFS hunk #1 context. The GKI tree can just drop it
+        # because it declares the do_new_mount_fc hook elsewhere; this tree
+        # declares it in blk.h, so relocate the include above mnt_idmapping.h
+        # instead of deleting it.
         SUBLEVEL=$(awk '/^SUBLEVEL *=/{print $3}' Makefile)
         if [ "$OP_KERNEL_VERSION" = "6.1" ] && [ "${SUBLEVEL:-0}" -ge 157 ]; then
-          sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
+          if grep -q '^#include <trace/hooks/blk.h>$' fs/namespace.c; then
+            sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
+            sed -i '/^#include <uapi\/linux\/mount.h>$/a #include <trace/hooks/blk.h>' fs/namespace.c
+          fi
         fi
 
         patch -p1 < "$patch_file"
