@@ -363,6 +363,16 @@ runs:
         } >> "$KERNEL_FOLDER/arch/arm64/configs/gki_defconfig"
         patch_file="$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_${SUSFS_BRANCH}.patch"
         [ -f "$patch_file" ] || { echo "::error::SUSFS patch not found: $patch_file"; exit 1; }
+
+        # Tree-specific fake patch, mirroring the GKI susfs-patches action: on
+        # android14-6.1 sublevel >= 157 the tree carries an extra
+        # `#include <trace/hooks/blk.h>` in fs/namespace.c that shifts the hunk
+        # #1 context. Drop it so the patch applies; SUSFS does not use it.
+        SUBLEVEL=$(awk '/^SUBLEVEL *=/{print $3}' Makefile)
+        if [ "$OP_KERNEL_VERSION" = "6.1" ] && [ "${SUBLEVEL:-0}" -ge 157 ]; then
+          sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
+        fi
+
         patch -p1 < "$patch_file"
         echo "SusFS Version: $susfs_version"
         echo "✅ SUSFS patches applied"
