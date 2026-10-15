@@ -391,6 +391,20 @@ runs:
         fi
 
         patch -p1 < "$patch_file"
+
+        # The SUSFS 50_add patch only `extern`s `struct selinux_state
+        # fake_state` and expects the root implementation to define AND
+        # populate it. For the kernelsu flavor susfs4ksu ships that glue as
+        # kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch; a root that has
+        # not synced it (BakaSU main HEAD delegates selinux_hide to SUSFS when
+        # the manual hook is present) links `undefined symbol: fake_state`.
+        # apply_susfs_root_glue.py restores the same glue inside the root's
+        # selinux_hide.c, and is a no-op once the root provides it.
+        SH_FILE="KernelSU/kernel/feature/selinux_hide.c"
+        if [ -f "$SH_FILE" ]; then
+          python3 "$GITHUB_WORKSPACE/scripts/apply_susfs_root_glue.py" "$SH_FILE"
+        fi
+
         echo "SusFS Version: $susfs_version"
         echo "✅ SUSFS patches applied"
         echo "::endgroup::"
