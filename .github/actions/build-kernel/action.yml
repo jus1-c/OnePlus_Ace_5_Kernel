@@ -832,7 +832,9 @@ runs:
         STATS="$(ccache -s || true)"
         CACHEABLE=$(echo "$STATS" | awk '/Cacheable calls:/ { match($0, /[0-9]+/); print substr($0, RSTART, RLENGTH) }' | head -n1)
         HITS=$(echo "$STATS" | awk '/^[[:space:]]*Hits:/ { match($0, /[0-9]+/); print substr($0, RSTART, RLENGTH) }' | head -n1)
+        MISSES=$(echo "$STATS" | awk '/^[[:space:]]*Misses:/ { match($0, /[0-9]+/); print substr($0, RSTART, RLENGTH) }' | head -n1)
         DIRECT=$(echo "$STATS" | awk '/Direct:/ { match($0, /[0-9]+/); print substr($0, RSTART, RLENGTH) }' | head -n1)
+        CACHE_SIZE=$(echo "$STATS" | awk '/Cache size/ { unit=$0; sub(/^[^(]*\(/, "", unit); sub(/\).*/, "", unit); line=$0; sub(/^[^:]*:[[:space:]]*/, "", line); sub(/[[:space:]]*\(.*/, "", line); print line " " unit; exit }' | xargs || true)
         if [ "${CACHEABLE:-0}" -gt 0 ]; then
           HIT_RATE=$(awk -v h="${HITS:-0}" -v c="$CACHEABLE" 'BEGIN{printf "%.1f", (h/c)*100}')
           DIRECT_RATE=$(awk -v d="${DIRECT:-0}" -v c="$CACHEABLE" 'BEGIN{printf "%.1f", (d/c)*100}')
@@ -841,37 +843,153 @@ runs:
         fi
         echo "hit_rate=${HIT_RATE}%" >> "$GITHUB_OUTPUT"
         echo "direct_rate=${DIRECT_RATE}%" >> "$GITHUB_OUTPUT"
+        echo "cache_size=${CACHE_SIZE:-unknown}" >> "$GITHUB_OUTPUT"
+        echo "hits=${HITS:-0}" >> "$GITHUB_OUTPUT"
+        echo "misses=${MISSES:-0}" >> "$GITHUB_OUTPUT"
+        {
+          echo "CCACHE_CACHE_SIZE=${CACHE_SIZE:-unknown}"
+          echo "CCACHE_HITS=${HITS:-0}"
+          echo "CCACHE_MISSES=${MISSES:-0}"
+          echo "CCACHE_HIT_RATE=${HIT_RATE}%"
+          echo "CCACHE_DIRECT_RATE=${DIRECT_RATE}%"
+        } >> "$GITHUB_ENV"
+        {
+          echo "## 📊 ccache Statistics"
+          echo ""
+          echo "| Metric | Value |"
+          echo "|--------|-------|"
+          echo "| **Cache size** | ${CACHE_SIZE:-unknown} |"
+          echo "| **Hit rate** | ${HIT_RATE}% (${HITS:-0} / ${CACHEABLE:-0}) |"
+          echo "| **Direct rate** | ${DIRECT_RATE}% |"
+          echo "| **Misses** | ${MISSES:-0} |"
+          echo ""
+          echo '```'
+          ccache -s --verbose || true
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Final Build Summary
       shell: bash
       run: |
         set -euo pipefail
+        KSU_SHA="${KSU_COMMIT_SHA:-unknown}"
+        SUSFS_SHA="${SUSFS_COMMIT_SHA:-unknown}"
+        FEATURE_FLAGS=(OP_OPT OP_BBR OP_BBR3 OP_BBG OP_HMBIRD OP_TTL OP_IP_SET OP_UNICODE OP_NTSYNC OP_DS)
+        FEATURES_ON=0
+        for f in "${FEATURE_FLAGS[@]}"; do
+          eval "v=\${$f:-false}"
+          [ "$v" = true ] && FEATURES_ON=$((FEATURES_ON + 1))
+        done
+        FEATURES_TOTAL=${#FEATURE_FLAGS[@]}
         {
           echo "Model: $OP_MODEL"
-          echo "Device: giuliac"
+          echo "Device: ${OP_DEVICE:-giuliac}"
+          echo "Android: ${OP_ANDROID_VERSION:-unknown}"
+          echo "Kernel base: ${OP_KERNEL_VERSION:-unknown}"
           echo "Kernel full: $KERNEL_FULL_VER"
           echo "Kernel Uname: ${KERNEL_UNAME:-unknown}"
+          echo "Build User: OnePlus"
+          echo "Build Host: ubuntu-build"
           echo "BakaSU Version: ${KSUVER:-unknown}"
-          echo "BakaSU commit SHA: ${KSU_COMMIT_SHA:-unknown}"
-          echo "SUSFS Version: ${SUSVER:-unknown}"
-          echo "SUSFS commit SHA: ${SUSFS_COMMIT_SHA:-unknown}"
+          echo "BakaSU commit SHA: $KSU_SHA"
+          if [ "${OP_SUSFS}" = true ]; then
+            echo "SUSFS Version: ${SUSVER:-unknown}"
+            echo "SUSFS commit SHA: $SUSFS_SHA"
+          fi
+          echo "Optimization: ${{ inputs.optimize_level }}"
+          echo "Clean Build: ${{ inputs.clean }}"
+          echo ""
+          echo "=== OnePlus Features ==="
+          echo "Features Enabled: ${FEATURES_ON}/${FEATURES_TOTAL}"
+          echo "Kernel Optimisations: ${OP_OPT:-false}"
+          echo "BBR: ${OP_BBR:-false}"
+          echo "BBRv3: ${OP_BBR3:-false}"
+          echo "BBG: ${OP_BBG:-false}"
+          echo "HMBIRD SCX: ${OP_HMBIRD:-false}"
+          echo "TTL: ${OP_TTL:-false}"
+          echo "IP_SET & IPv6 NAT: ${OP_IP_SET:-false}"
+          echo "Unicode Fix: ${OP_UNICODE:-false}"
+          echo "NTSync: ${OP_NTSYNC:-false}"
+          echo "Droidspaces: ${OP_DS:-false}"
+          echo ""
           echo "Image SHA256: ${{ steps.collect_stats.outputs.image_sha256 }}"
           echo "AnyKernel3 ZIP SHA256: ${{ steps.create_zip.outputs.zip_sha256 }}"
           echo "Compiler: ${CLANG_VERSION:-unknown}"
           echo "Warnings Count: ${{ steps.collect_stats.outputs.warnings_count }}"
+          echo "Build Time: ${{ steps.collect_stats.outputs.build_time }}s"
+          if [ "${{ inputs.clean }}" == "false" ]; then
+            echo "ccache Cache Size: ${CCACHE_CACHE_SIZE:-unknown}"
+            echo "ccache Hits/Misses: ${CCACHE_HITS:-0}/${CCACHE_MISSES:-0}"
+            echo "ccache Hit Rate: ${CCACHE_HIT_RATE:-0.0%}"
+            echo "ccache Direct Rate: ${CCACHE_DIRECT_RATE:-0.0%}"
+          else
+            echo "ccache: Disabled (clean build)"
+          fi
           echo "Artifact Name: ${ZIP_NAME}"
         } | tee summary.txt
+
         {
           echo "### 🎯 Kernel Build Summary"
           echo ""
           echo "| Metric | Value |"
           echo "|--------|-------|"
-          echo "| **Device** | giuliac |"
-          echo "| **Kernel Version** | $KERNEL_FULL_VER |"
+          echo "| **Model** | ${OP_MODEL} |"
+          echo "| **Device** | ${OP_DEVICE:-giuliac} |"
+          echo "| **Android** | ${OP_ANDROID_VERSION:-unknown} |"
+          echo "| **Kernel Version** | ${KERNEL_FULL_VER} |"
           echo "| **Kernel Uname** | \`${KERNEL_UNAME:-unknown}\` |"
+          echo "| **Build User** | OnePlus |"
+          echo "| **Build Host** | ubuntu-build |"
           echo "| **BakaSU Version** | ${KSUVER:-unknown} |"
-          echo "| **SUSFS Version** | ${SUSVER:-unknown} |"
+          if [ "$KSU_SHA" != "unknown" ]; then
+            echo "| **BakaSU Commit** | [\`${KSU_SHA:0:8}\`](https://github.com/Baka-SU/BakaSU/commit/$KSU_SHA) |"
+          else
+            echo "| **BakaSU Commit** | unknown |"
+          fi
+          if [ "${OP_SUSFS}" = true ]; then
+            echo "| **SUSFS Version** | ${SUSVER:-unknown} |"
+            if [ "$SUSFS_SHA" != "unknown" ]; then
+              echo "| **SUSFS Commit** | [\`${SUSFS_SHA:0:8}\`](https://gitlab.com/simonpunk/susfs4ksu/-/commit/$SUSFS_SHA) |"
+            else
+              echo "| **SUSFS Commit** | unknown |"
+            fi
+          fi
+          echo ""
+          echo "### 🔧 OnePlus Features"
+          echo ""
+          echo "| Feature | Status |"
+          echo "|---------|--------|"
+          echo "| **Features Enabled** | ${FEATURES_ON}/${FEATURES_TOTAL} |"
+          echo "| **Kernel Optimisations** | ${OP_OPT:-false} |"
+          echo "| **BBR** | ${OP_BBR:-false} |"
+          echo "| **BBRv3** | ${OP_BBR3:-false} |"
+          echo "| **BBG** | ${OP_BBG:-false} |"
+          echo "| **HMBIRD SCX** | ${OP_HMBIRD:-false} |"
+          echo "| **TTL** | ${OP_TTL:-false} |"
+          echo "| **IP_SET & IPv6 NAT** | ${OP_IP_SET:-false} |"
+          echo "| **Unicode Fix** | ${OP_UNICODE:-false} |"
+          echo "| **NTSync** | ${OP_NTSYNC:-false} |"
+          echo "| **Droidspaces** | ${OP_DS:-false} |"
+          echo ""
+          echo "### 📊 Build Metrics"
+          echo ""
+          echo "| Metric | Value |"
+          echo "|--------|-------|"
+          echo "| **Optimization** | ${{ inputs.optimize_level }} |"
+          echo "| **Clean Build** | ${{ inputs.clean }} |"
+          echo "| **Build Time** | ${{ steps.collect_stats.outputs.build_time }}s |"
+          if [ "${{ inputs.clean }}" == "false" ]; then
+            echo "| **ccache Cache Size** | ${CCACHE_CACHE_SIZE:-unknown} |"
+            echo "| **ccache Hits** | ${CCACHE_HITS:-0} |"
+            echo "| **ccache Misses** | ${CCACHE_MISSES:-0} |"
+            echo "| **ccache Hit Rate** | ${CCACHE_HIT_RATE:-0.0%} |"
+            echo "| **ccache Direct Rate** | ${CCACHE_DIRECT_RATE:-0.0%} |"
+          fi
+          echo "| **Image SHA256** | \`${{ steps.collect_stats.outputs.image_sha256 }}\` |"
+          echo "| **Warnings** | ${{ steps.collect_stats.outputs.warnings_count }} |"
+          echo "| **Compiler** | \`${CLANG_VERSION:-unknown}\` |"
           echo "| **Artifact Name** | \`${ZIP_NAME}\` |"
+          echo "| **AnyKernel3 SHA256** | \`${{ steps.create_zip.outputs.zip_sha256 }}\` |"
         } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upload Debug Artifacts
